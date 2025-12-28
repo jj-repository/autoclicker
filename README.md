@@ -1,6 +1,6 @@
 # Dual AutoClicker + Keyboard Key Presser
 
-A lightweight autoclicker application with dual mouse autoclickers, keyboard key auto-presser, and emergency stop functionality. Features customizable hotkeys and intervals for all automation modes.
+A robust, production-ready autoclicker application with dual mouse autoclickers, keyboard key auto-presser, and emergency stop functionality. Features thread-safe operation, error handling, customizable hotkeys, and configurable intervals for all automation modes.
 
 ## Features
 
@@ -25,9 +25,13 @@ A lightweight autoclicker application with dual mouse autoclickers, keyboard key
 
 ### General
 - **Simple and intuitive GUI** with improved layout
-- **Configuration persistence** - all settings saved automatically
+- **Configuration persistence** - all settings saved automatically with validation
 - **Toggle on/off** with the same hotkey for each feature
-- **Status indicators** for each autoclicker
+- **Status indicators** for each autoclicker with error states
+- **Thread-safe operation** - no race conditions or crashes
+- **Robust error handling** - gracefully handles failures
+- **Rate limiting** - prevents accidental rapid toggling (200ms cooldown)
+- **Input validation** - enforces min (0.01s) and max (60s) intervals to prevent system overload
 
 ## Installation
 
@@ -147,6 +151,20 @@ sudo python3 autoclicker_evdev.py
 - The evdev version requires **root/sudo** privileges to create virtual input devices
 - All settings persist between sessions
 
+## Technical Improvements
+
+This application includes enterprise-grade stability and safety features:
+
+- **Thread Safety**: All state-changing operations use mutex locks to prevent race conditions
+- **Error Recovery**: Click/press loops include exception handling with visual error indicators
+- **Rate Limiting**: 200ms cooldown on hotkey presses prevents accidental double-toggles
+- **Input Validation**:
+  - Minimum interval: 0.01s (prevents system DoS)
+  - Maximum interval: 60s (prevents unreasonable values)
+  - Config file validation with safe fallbacks
+- **Graceful Degradation**: Invalid config values don't crash the app
+- **Thread-Safe Interval Updates**: Intervals are read atomically to prevent mid-update inconsistencies
+
 ## Troubleshooting
 
 ### "Permission denied" errors (evdev version)
@@ -159,11 +177,36 @@ sudo python3 autoclicker_evdev.py
 - Make sure the application window is running (doesn't need focus)
 - Check that you're not in "hotkey capture" mode (button shows "Press a key...")
 - Try reconfiguring the hotkey
+- Wait 200ms between hotkey presses (rate limiting)
 
 ### Keys not pressing / clicks not working
 - **evdev version**: Make sure you're running with sudo
 - Check that the status shows "Clicking..." or "Pressing..."
-- Verify the interval is set correctly
+- If status shows "Error" (orange), check console output for details
+- Verify the interval is set correctly (min 0.01s, max 60s)
+
+### Error status (orange indicator)
+- Check the terminal/console for detailed error messages
+- Virtual device initialization may have failed
+- Try restarting the application with proper permissions
+
+## Building Executables
+
+### Linux
+```bash
+pip install pyinstaller
+pyinstaller --onefile --windowed autoclicker_evdev.py
+# Output: dist/autoclicker_evdev
+```
+
+### Windows
+```bash
+pip install pyinstaller
+pyinstaller --onefile --windowed autoclicker_evdev.py
+# Output: dist\autoclicker_evdev.exe
+```
+
+Note: Windows executables require the evdev alternative (pynput) for mouse control.
 
 ## License
 

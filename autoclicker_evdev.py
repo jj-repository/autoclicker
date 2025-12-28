@@ -10,6 +10,13 @@ from pynput import keyboard
 from pynput.keyboard import Key, KeyCode
 from evdev import UInput, ecodes as e
 
+# Constants
+MIN_INTERVAL = 0.01  # Minimum interval: 10ms (100 clicks/sec max)
+MAX_INTERVAL = 60.0  # Maximum interval: 60 seconds
+DEFAULT_CLICKER1_INTERVAL = 0.1
+DEFAULT_CLICKER2_INTERVAL = 0.5
+DEFAULT_KEYPRESSER_INTERVAL = 0.1
+
 
 class DualAutoClicker:
     def __init__(self):
@@ -21,24 +28,29 @@ class DualAutoClicker:
         # Config file path
         self.config_path = Path.home() / ".config" / "autoclicker" / "config.json"
 
+        # Thread locks for thread-safe state access
+        self.clicker1_lock = threading.Lock()
+        self.clicker2_lock = threading.Lock()
+        self.keypresser_lock = threading.Lock()
+
         # Clicker 1 state (defaults)
         self.clicker1_hotkey = Key.f6
         self.clicker1_hotkey_display = "F6"
-        self.clicker1_interval = 0.1
+        self.clicker1_interval = DEFAULT_CLICKER1_INTERVAL
         self.clicker1_clicking = False
         self.clicker1_thread = None
 
         # Clicker 2 state (defaults)
         self.clicker2_hotkey = Key.f7
         self.clicker2_hotkey_display = "F7"
-        self.clicker2_interval = 0.5
+        self.clicker2_interval = DEFAULT_CLICKER2_INTERVAL
         self.clicker2_clicking = False
         self.clicker2_thread = None
 
         # Keyboard Key Presser state (defaults)
         self.keypresser_hotkey = Key.f8
         self.keypresser_hotkey_display = "F8"
-        self.keypresser_interval = 0.1
+        self.keypresser_interval = DEFAULT_KEYPRESSER_INTERVAL
         self.keypresser_target_key = e.KEY_SPACE  # Default to spacebar
         self.keypresser_target_key_display = "Space"
         self.keypresser_pressing = False
@@ -55,6 +67,10 @@ class DualAutoClicker:
         self.hotkey_capture_listener = None
         self.listening_for_hotkey = False
         self.hotkey_target = None  # "clicker1", "clicker2", "keypresser", or "emergency_stop"
+
+        # Rate limiting for hotkey presses
+        self.last_hotkey_time = {}
+        self.hotkey_cooldown = 0.2  # 200ms cooldown between hotkey presses
 
         # UI elements
         self.interval1_var = None
@@ -77,6 +93,16 @@ class DualAutoClicker:
 
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+    def _validate_interval(self, interval, default):
+        """Validate interval is within acceptable bounds"""
+        try:
+            interval_float = float(interval)
+            if MIN_INTERVAL <= interval_float <= MAX_INTERVAL:
+                return interval_float
+        except (ValueError, TypeError):
+            pass
+        return default
+
     def load_config(self):
         """Load saved configuration from JSON file"""
         if not self.config_path.exists():
@@ -86,10 +112,19 @@ class DualAutoClicker:
             with open(self.config_path, 'r') as f:
                 config = json.load(f)
 
-            # Load intervals
-            self.clicker1_interval = config.get('clicker1_interval', self.clicker1_interval)
-            self.clicker2_interval = config.get('clicker2_interval', self.clicker2_interval)
-            self.keypresser_interval = config.get('keypresser_interval', self.keypresser_interval)
+            # Load and validate intervals
+            self.clicker1_interval = self._validate_interval(
+                config.get('clicker1_interval', self.clicker1_interval),
+                DEFAULT_CLICKER1_INTERVAL
+            )
+            self.clicker2_interval = self._validate_interval(
+                config.get('clicker2_interval', self.clicker2_interval),
+                DEFAULT_CLICKER2_INTERVAL
+            )
+            self.keypresser_interval = self._validate_interval(
+                config.get('keypresser_interval', self.keypresser_interval),
+                DEFAULT_KEYPRESSER_INTERVAL
+            )
 
             # Load hotkeys
             if 'clicker1_hotkey' in config:
@@ -358,38 +393,28 @@ class DualAutoClicker:
         self.keypresser_status_label = tk.Label(parent, textvariable=self.keypresser_status_var, font=("Arial", 10, "bold"), fg="green")
         self.keypresser_status_label.grid(row=start_row+3, column=column, pady=5)
 
-    def apply_interval1(self):
+    def _apply_interval(self, interval_var, target_attr, name):
+        """Consolidated interval application with validation"""
         try:
-            interval_value = float(self.interval1_var.get())
-            if interval_value <= 0:
-                raise ValueError("Interval must be positive")
-            self.clicker1_interval = interval_value
+            interval_value = float(interval_var.get())
+            if interval_value < MIN_INTERVAL:
+                raise ValueError(f"Interval must be at least {MIN_INTERVAL}s (prevents system overload)")
+            if interval_value > MAX_INTERVAL:
+                raise ValueError(f"Interval must be at most {MAX_INTERVAL}s")
+            setattr(self, target_attr, interval_value)
             self.save_config()
-            messagebox.showinfo("Success", f"Clicker 1 interval updated to {interval_value}s")
+            messagebox.showinfo("Success", f"{name} interval updated to {interval_value}s")
         except ValueError as e:
             messagebox.showerror("Error", f"Invalid interval: {e}")
+
+    def apply_interval1(self):
+        self._apply_interval(self.interval1_var, 'clicker1_interval', 'Clicker 1')
 
     def apply_interval2(self):
-        try:
-            interval_value = float(self.interval2_var.get())
-            if interval_value <= 0:
-                raise ValueError("Interval must be positive")
-            self.clicker2_interval = interval_value
-            self.save_config()
-            messagebox.showinfo("Success", f"Clicker 2 interval updated to {interval_value}s")
-        except ValueError as e:
-            messagebox.showerror("Error", f"Invalid interval: {e}")
+        self._apply_interval(self.interval2_var, 'clicker2_interval', 'Clicker 2')
 
     def apply_keypresser_interval(self):
-        try:
-            interval_value = float(self.keypresser_interval_var.get())
-            if interval_value <= 0:
-                raise ValueError("Interval must be positive")
-            self.keypresser_interval = interval_value
-            self.save_config()
-            messagebox.showinfo("Success", f"Key Presser interval updated to {interval_value}s")
-        except ValueError as e:
-            messagebox.showerror("Error", f"Invalid interval: {e}")
+        self._apply_interval(self.keypresser_interval_var, 'keypresser_interval', 'Key Presser')
 
     def select_target_key(self):
         """Let user select which keyboard key to auto-press"""
@@ -535,12 +560,8 @@ class DualAutoClicker:
                 }
                 self.virtual_mouse = UInput(cap, name="AutoClicker-Virtual-Mouse")
             except Exception as ex:
-                messagebox.showerror(
-                    "Error",
-                    f"Failed to create virtual mouse device.\n"
-                    f"You may need to run with: sudo python3 autoclicker.py\n\n"
-                    f"Error: {ex}"
-                )
+                print(f"Failed to create virtual mouse device: {ex}")
+                print("You may need to run with: sudo python3 autoclicker_evdev.py")
                 raise
 
     def perform_click(self):
@@ -568,12 +589,8 @@ class DualAutoClicker:
                 }
                 self.virtual_keyboard = UInput(cap, name="AutoClicker-Virtual-Keyboard")
             except Exception as ex:
-                messagebox.showerror(
-                    "Error",
-                    f"Failed to create virtual keyboard device.\n"
-                    f"You may need to run with: sudo python3 autoclicker_evdev.py\n\n"
-                    f"Error: {ex}"
-                )
+                print(f"Failed to create virtual keyboard device: {ex}")
+                print("You may need to run with: sudo python3 autoclicker_evdev.py")
                 raise
 
     def perform_keypress(self):
@@ -605,7 +622,18 @@ class DualAutoClicker:
             return str(key)
 
     def on_hotkey_press(self, key):
+        """Handle hotkey presses with rate limiting"""
         try:
+            # Rate limiting to prevent rapid toggling
+            current_time = time.time()
+            key_str = str(key)
+
+            if key_str in self.last_hotkey_time:
+                if current_time - self.last_hotkey_time[key_str] < self.hotkey_cooldown:
+                    return  # Ignore rapid key presses
+
+            self.last_hotkey_time[key_str] = current_time
+
             # Check emergency stop hotkey first (highest priority)
             if key == self.emergency_stop_hotkey:
                 self.emergency_stop_all()
@@ -640,42 +668,76 @@ class DualAutoClicker:
             self.start_clicker2()
 
     def start_clicker1(self):
-        if not self.clicker1_clicking:
-            self.clicker1_clicking = True
-            self.status1_var.set("Clicking...")
-            self.status1_label.config(fg="red")
-            self.clicker1_thread = threading.Thread(target=self._click_loop1, daemon=True)
-            self.clicker1_thread.start()
+        with self.clicker1_lock:
+            if not self.clicker1_clicking:
+                self.clicker1_clicking = True
+                self.status1_var.set("Clicking...")
+                self.status1_label.config(fg="red")
+                self.clicker1_thread = threading.Thread(target=self._click_loop1, daemon=True)
+                self.clicker1_thread.start()
 
     def stop_clicker1(self):
-        if self.clicker1_clicking:
-            self.clicker1_clicking = False
-            self.status1_var.set("Idle")
-            self.status1_label.config(fg="green")
+        with self.clicker1_lock:
+            if self.clicker1_clicking:
+                self.clicker1_clicking = False
+                self.status1_var.set("Idle")
+                self.status1_label.config(fg="green")
 
     def start_clicker2(self):
-        if not self.clicker2_clicking:
-            self.clicker2_clicking = True
-            self.status2_var.set("Clicking...")
-            self.status2_label.config(fg="red")
-            self.clicker2_thread = threading.Thread(target=self._click_loop2, daemon=True)
-            self.clicker2_thread.start()
+        with self.clicker2_lock:
+            if not self.clicker2_clicking:
+                self.clicker2_clicking = True
+                self.status2_var.set("Clicking...")
+                self.status2_label.config(fg="red")
+                self.clicker2_thread = threading.Thread(target=self._click_loop2, daemon=True)
+                self.clicker2_thread.start()
 
     def stop_clicker2(self):
-        if self.clicker2_clicking:
-            self.clicker2_clicking = False
-            self.status2_var.set("Idle")
-            self.status2_label.config(fg="green")
+        with self.clicker2_lock:
+            if self.clicker2_clicking:
+                self.clicker2_clicking = False
+                self.status2_var.set("Idle")
+                self.status2_label.config(fg="green")
 
     def _click_loop1(self):
-        while self.clicker1_clicking:
-            self.perform_click()
-            time.sleep(self.clicker1_interval)
+        """Click loop for clicker 1 with error handling"""
+        while True:
+            with self.clicker1_lock:
+                if not self.clicker1_clicking:
+                    break
+                interval = self.clicker1_interval
+
+            try:
+                self.perform_click()
+            except Exception as e:
+                print(f"Error in clicker 1: {e}")
+                with self.clicker1_lock:
+                    self.clicker1_clicking = False
+                self.window.after(0, lambda: self.status1_var.set("Error"))
+                self.window.after(0, lambda: self.status1_label.config(fg="orange"))
+                break
+
+            time.sleep(interval)
 
     def _click_loop2(self):
-        while self.clicker2_clicking:
-            self.perform_click()
-            time.sleep(self.clicker2_interval)
+        """Click loop for clicker 2 with error handling"""
+        while True:
+            with self.clicker2_lock:
+                if not self.clicker2_clicking:
+                    break
+                interval = self.clicker2_interval
+
+            try:
+                self.perform_click()
+            except Exception as e:
+                print(f"Error in clicker 2: {e}")
+                with self.clicker2_lock:
+                    self.clicker2_clicking = False
+                self.window.after(0, lambda: self.status2_var.set("Error"))
+                self.window.after(0, lambda: self.status2_label.config(fg="orange"))
+                break
+
+            time.sleep(interval)
 
     def toggle_keypresser(self):
         if self.keypresser_pressing:
@@ -686,23 +748,40 @@ class DualAutoClicker:
             self.start_keypresser()
 
     def start_keypresser(self):
-        if not self.keypresser_pressing:
-            self.keypresser_pressing = True
-            self.keypresser_status_var.set("Pressing...")
-            self.keypresser_status_label.config(fg="red")
-            self.keypresser_thread = threading.Thread(target=self._keypresser_loop, daemon=True)
-            self.keypresser_thread.start()
+        with self.keypresser_lock:
+            if not self.keypresser_pressing:
+                self.keypresser_pressing = True
+                self.keypresser_status_var.set("Pressing...")
+                self.keypresser_status_label.config(fg="red")
+                self.keypresser_thread = threading.Thread(target=self._keypresser_loop, daemon=True)
+                self.keypresser_thread.start()
 
     def stop_keypresser(self):
-        if self.keypresser_pressing:
-            self.keypresser_pressing = False
-            self.keypresser_status_var.set("Idle")
-            self.keypresser_status_label.config(fg="green")
+        with self.keypresser_lock:
+            if self.keypresser_pressing:
+                self.keypresser_pressing = False
+                self.keypresser_status_var.set("Idle")
+                self.keypresser_status_label.config(fg="green")
 
     def _keypresser_loop(self):
-        while self.keypresser_pressing:
-            self.perform_keypress()
-            time.sleep(self.keypresser_interval)
+        """Key press loop with error handling"""
+        while True:
+            with self.keypresser_lock:
+                if not self.keypresser_pressing:
+                    break
+                interval = self.keypresser_interval
+
+            try:
+                self.perform_keypress()
+            except Exception as e:
+                print(f"Error in key presser: {e}")
+                with self.keypresser_lock:
+                    self.keypresser_pressing = False
+                self.window.after(0, lambda: self.keypresser_status_var.set("Error"))
+                self.window.after(0, lambda: self.keypresser_status_label.config(fg="orange"))
+                break
+
+            time.sleep(interval)
 
     def emergency_stop_all(self):
         """Stop all autoclickers and key presser immediately"""
