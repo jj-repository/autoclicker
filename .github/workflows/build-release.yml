@@ -1,0 +1,125 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller pynput python-evdev
+
+    - name: Build Linux executables
+      run: |
+        pyinstaller --onefile --name autoclicker-evdev autoclicker_evdev.py
+        pyinstaller --onefile --name autoclicker-basic autoclicker.py
+
+    - name: Upload Linux artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: linux-executables
+        path: |
+          dist/autoclicker-evdev
+          dist/autoclicker-basic
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller pynput python-evdev
+
+    - name: Build Windows executables
+      run: |
+        pyinstaller --onefile --windowed --name autoclicker-evdev autoclicker_evdev.py
+        pyinstaller --onefile --windowed --name autoclicker-basic autoclicker.py
+
+    - name: Upload Windows artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-executables
+        path: |
+          dist/autoclicker-evdev.exe
+          dist/autoclicker-basic.exe
+
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download Linux artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: linux-executables
+        path: dist/linux
+
+    - name: Download Windows artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: windows-executables
+        path: dist/windows
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/linux/autoclicker-evdev
+          dist/linux/autoclicker-basic
+          dist/windows/autoclicker-evdev.exe
+          dist/windows/autoclicker-basic.exe
+        body: |
+          ## Downloads
+
+          ### Windows
+          - **autoclicker-evdev.exe** - Full version with keyboard presser (Recommended)
+          - **autoclicker-basic.exe** - Mouse clicking only
+
+          ### Linux
+          - **autoclicker-evdev** - Full version with keyboard presser (Recommended - requires sudo)
+          - **autoclicker-basic** - Mouse clicking only
+
+          ## Installation
+
+          ### Windows
+          1. Download the .exe file
+          2. Run it (may need Administrator privileges)
+
+          ### Linux
+          1. Download the binary
+          2. Make it executable: `chmod +x autoclicker-evdev`
+          3. Run with sudo: `sudo ./autoclicker-evdev`
+
+          ## What's New
+          See commit history for detailed changes.
+
+          ---
+          🤖 Built automatically with GitHub Actions
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
