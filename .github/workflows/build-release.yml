@@ -23,7 +23,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller pynput python-evdev
+        pip install pyinstaller pynput evdev
 
     - name: Build Linux executables
       run: |
@@ -51,20 +51,18 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller pynput python-evdev
+        pip install pyinstaller pynput
 
     - name: Build Windows executables
       run: |
-        pyinstaller --onefile --windowed --name autoclicker-evdev autoclicker_evdev.py
-        pyinstaller --onefile --windowed --name autoclicker-basic autoclicker.py
+        pyinstaller --onefile --windowed --name autoclicker autoclicker.py
 
     - name: Upload Windows artifacts
       uses: actions/upload-artifact@v4
       with:
         name: windows-executables
         path: |
-          dist/autoclicker-evdev.exe
-          dist/autoclicker-basic.exe
+          dist/autoclicker.exe
 
   release:
     needs: [build-linux, build-windows]
@@ -92,14 +90,12 @@ jobs:
         files: |
           dist/linux/autoclicker-evdev
           dist/linux/autoclicker-basic
-          dist/windows/autoclicker-evdev.exe
-          dist/windows/autoclicker-basic.exe
+          dist/windows/autoclicker.exe
         body: |
           ## Downloads
 
           ### Windows
-          - **autoclicker-evdev.exe** - Full version with keyboard presser (Recommended)
-          - **autoclicker-basic.exe** - Mouse clicking only
+          - **autoclicker.exe** - AutoClicker with mouse clicking support
 
           ### Linux
           - **autoclicker-evdev** - Full version with keyboard presser (Recommended - requires sudo)
