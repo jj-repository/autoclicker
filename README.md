@@ -1,6 +1,7 @@
 # Dual AutoClicker + Keyboard Key Presser
 
 [![Build](https://github.com/jj-repository/autoclicker/actions/workflows/build-release.yml/badge.svg)](https://github.com/jj-repository/autoclicker/actions/workflows/build-release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/jj-repository/autoclicker)](https://github.com/jj-repository/autoclicker/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/jj-repository/autoclicker/total)](https://github.com/jj-repository/autoclicker/releases)
 
 A robust, production-ready autoclicker application with dual mouse autoclickers, keyboard key auto-presser, and emergency stop functionality. Features thread-safe operation, error handling, customizable hotkeys, and configurable intervals for all automation modes.
