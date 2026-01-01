@@ -74,8 +74,12 @@ sudo python3 autoclicker_evdev.py
 
 ### Dependencies
 - `pynput` - Keyboard hotkey listening
-- `evdev` - Low-level input device simulation (evdev version only)
+- `evdev` - Low-level input device simulation (Linux evdev version only)
 - `tkinter` - GUI (usually pre-installed with Python)
+
+**Requirements files:**
+- `requirements.txt` - Cross-platform (Windows/Linux basic version)
+- `requirements-linux.txt` - Linux full version with evdev
 
 ## Usage
 

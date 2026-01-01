@@ -9,8 +9,7 @@ if [ ! -d "venv" ]; then
     echo "Virtual environment not found. Creating one..."
     python3 -m venv venv
     echo "Installing dependencies..."
-    ./venv/bin/pip install -r requirements.txt
-    ./venv/bin/pip install evdev
+    ./venv/bin/pip install -r requirements-linux.txt
 fi
 
 # Check if running as root (required for evdev version)
