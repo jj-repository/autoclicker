@@ -1,7 +1,8 @@
 @echo off
 REM Build script for Windows executables
+REM Note: Only the basic version works on Windows (evdev is Linux-only)
 
-echo Building Windows executables...
+echo Building Windows executable...
 
 REM Check if PyInstaller is installed
 where pyinstaller >nul 2>nul
@@ -15,18 +16,14 @@ if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 if exist *.spec del *.spec
 
-REM Build evdev version (recommended - includes keyboard presser)
-echo Building autoclicker-evdev (recommended version)...
-pyinstaller --onefile --windowed --name autoclicker-evdev autoclicker_evdev.py
-
-REM Build basic version
-echo Building autoclicker-basic...
-pyinstaller --onefile --windowed --name autoclicker-basic autoclicker.py
+REM Build basic version (the only version that works on Windows)
+echo Building autoclicker...
+pyinstaller --onefile --windowed --name autoclicker autoclicker.py
 
 echo.
-echo Build complete! Executables are in the dist\ directory:
-echo   - autoclicker-evdev.exe (recommended - includes keyboard presser)
-echo   - autoclicker-basic.exe (mouse only)
+echo Build complete! Executable is in the dist\ directory:
+echo   - autoclicker.exe (mouse clicking with dual clickers)
 echo.
-echo Note: On Windows, you may need to run as Administrator for proper functionality
+echo Note: The keyboard presser feature requires Linux (evdev).
+echo       On Windows, you may need to run as Administrator for proper functionality.
 pause
