@@ -4,11 +4,9 @@ from tkinter import ttk, messagebox
 import threading
 import time
 import json
-import os
 from pathlib import Path
-from pynput import keyboard
+from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
-from evdev import UInput, ecodes as e
 
 # Constants
 MIN_INTERVAL = 0.01  # Minimum interval: 10ms (100 clicks/sec max)
@@ -46,7 +44,7 @@ class DualAutoClicker:
         self.clicker2_thread = None
 
         # Shared state
-        self.virtual_mouse = None  # Will be initialized when needed
+        self.mouse_controller = mouse.Controller()  # pynput mouse controller
         self.keyboard_listener = None
         self.hotkey_capture_listener = None
         self.listening_for_hotkey = False
@@ -327,32 +325,9 @@ class DualAutoClicker:
         # Restart the main keyboard listener
         self.start_keyboard_listener()
 
-    def init_virtual_mouse(self):
-        """Initialize the virtual mouse device using evdev"""
-        if self.virtual_mouse is None:
-            try:
-                # Create a virtual mouse device with button capabilities
-                cap = {
-                    e.EV_KEY: [e.BTN_LEFT, e.BTN_RIGHT, e.BTN_MIDDLE],
-                }
-                self.virtual_mouse = UInput(cap, name="AutoClicker-Virtual-Mouse")
-            except Exception as ex:
-                print(f"Failed to create virtual mouse device: {ex}")
-                print("You may need to run with: sudo python3 autoclicker.py")
-                raise
-
     def perform_click(self):
-        """Perform a single left mouse click using evdev"""
-        if self.virtual_mouse is None:
-            self.init_virtual_mouse()
-
-        # Press left button
-        self.virtual_mouse.write(e.EV_KEY, e.BTN_LEFT, 1)
-        self.virtual_mouse.syn()
-
-        # Release left button
-        self.virtual_mouse.write(e.EV_KEY, e.BTN_LEFT, 0)
-        self.virtual_mouse.syn()
+        """Perform a single left mouse click using pynput"""
+        self.mouse_controller.click(mouse.Button.left, 1)
 
     def get_key_display_name(self, key):
         # Handle special keys
@@ -495,8 +470,6 @@ class DualAutoClicker:
         self.stop_keyboard_listener()
         if self.hotkey_capture_listener:
             self.hotkey_capture_listener.stop()
-        if self.virtual_mouse:
-            self.virtual_mouse.close()
         self.window.destroy()
 
     def run(self):

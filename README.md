@@ -39,41 +39,36 @@ A robust, production-ready autoclicker application with dual mouse autoclickers,
 
 ## Installation
 
-### Option 1: Standard Version (autoclicker.py)
-Uses pynput for mouse clicking. Works on most systems but may have permission issues.
+### Quick Start (Recommended)
+The run script automatically handles everything:
 
-1. Create a virtual environment:
 ```bash
-python -m venv venv
+./run.sh           # Basic version (mouse clicking only)
+sudo ./run.sh      # Full version with keyboard presser
 ```
 
-2. Install dependencies:
+The script will:
+- Create a virtual environment if needed
+- Install all dependencies
+- Run the appropriate version based on privileges
+
+### Manual Installation
+
+#### Basic Version (autoclicker.py)
+Uses pynput for mouse clicking. Works on Linux and Windows without root privileges.
+
 ```bash
-./venv/bin/pip install -r requirements.txt
+pip install pynput
+python3 autoclicker.py
 ```
 
-3. Run:
-```bash
-./run.sh
-```
-
-### Option 2: Advanced Version with Keyboard Presser (autoclicker_evdev.py) - Recommended
+#### Full Version with Keyboard Presser (autoclicker_evdev.py) - Linux Only
 Uses evdev for low-level input simulation. Supports both mouse and keyboard automation.
 
 **Requires root/sudo privileges!**
 
-1. Install dependencies:
 ```bash
-pip install pynput evdev --break-system-packages
-```
-
-Or use the provided script:
-```bash
-./install_pynput_root.sh
-```
-
-2. Run with sudo:
-```bash
+pip install pynput evdev
 sudo python3 autoclicker_evdev.py
 ```
 
@@ -199,18 +194,20 @@ sudo python3 autoclicker_evdev.py
 ### Linux
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --windowed autoclicker_evdev.py
-# Output: dist/autoclicker_evdev
+# Full version (requires sudo to run):
+pyinstaller --onefile autoclicker_evdev.py
+# Basic version (no sudo required):
+pyinstaller --onefile autoclicker.py
 ```
 
 ### Windows
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --windowed autoclicker_evdev.py
-# Output: dist\autoclicker_evdev.exe
+pyinstaller --onefile --windowed autoclicker.py
+# Output: dist\autoclicker.exe
 ```
 
-Note: Windows executables require the evdev alternative (pynput) for mouse control.
+Note: Windows only supports the basic version (autoclicker.py) as evdev is Linux-only.
 
 ## License
 
