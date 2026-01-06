@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+"""
+Dual AutoClicker - Cross-Platform Version (pynput)
+
+This version uses pynput for mouse control and keyboard hotkey detection.
+Works on Windows, macOS, and Linux (X11).
+
+Use this version when:
+- Running on Windows or macOS
+- Running on Linux with X11 (not Wayland)
+- You only need mouse auto-clicking
+
+For Linux with Wayland or games that don't detect pynput clicks,
+use autoclicker_evdev.py instead (requires root/uinput permissions).
+"""
 import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
@@ -7,6 +21,14 @@ import json
 from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
+
+__version__ = "1.1.0"
+
+# Update Constants
+GITHUB_REPO = "jj-repository/autoclicker"
+GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
+GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}"
 
 # Constants
 MIN_INTERVAL = 0.01  # Minimum interval: 10ms (100 clicks/sec max)
@@ -70,6 +92,10 @@ class DualAutoClicker:
 
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+        # Check for updates on startup (delay to let UI initialize)
+        self.window.after(2000, lambda: threading.Thread(
+            target=self._check_for_updates, args=(True,), daemon=True).start())
+
     def _validate_interval(self, interval, default):
         """Validate interval is within acceptable bounds"""
         try:
@@ -99,15 +125,21 @@ class DualAutoClicker:
                 DEFAULT_CLICKER2_INTERVAL
             )
 
-            # Load hotkeys
+            # Load hotkeys with type validation
             if 'clicker1_hotkey' in config:
                 self.clicker1_hotkey = self._deserialize_key(config['clicker1_hotkey'])
-                self.clicker1_hotkey_display = config.get('clicker1_hotkey_display', 'F6')
+                display = config.get('clicker1_hotkey_display', 'F6')
+                self.clicker1_hotkey_display = display if isinstance(display, str) else 'F6'
 
             if 'clicker2_hotkey' in config:
                 self.clicker2_hotkey = self._deserialize_key(config['clicker2_hotkey'])
-                self.clicker2_hotkey_display = config.get('clicker2_hotkey_display', 'F7')
+                display = config.get('clicker2_hotkey_display', 'F7')
+                self.clicker2_hotkey_display = display if isinstance(display, str) else 'F7'
 
+        except json.JSONDecodeError as e:
+            print(f"Error: Config file is corrupted: {e}")
+        except (IOError, OSError) as e:
+            print(f"Error: Cannot read config file: {e}")
         except Exception as e:
             print(f"Error loading config: {e}")
 
@@ -143,15 +175,40 @@ class DualAutoClicker:
 
     def _deserialize_key(self, key_data):
         """Convert JSON data back to a pynput key"""
-        if key_data['type'] == 'special':
+        # Validate that key_data is a dict with expected structure
+        if not isinstance(key_data, dict):
+            print(f"Warning: Invalid hotkey data type, expected dict, got {type(key_data).__name__}")
+            return Key.f6
+
+        key_type = key_data.get('type', 'special')
+        if not isinstance(key_type, str):
+            return Key.f6
+
+        if key_type == 'special':
             # Get the Key attribute by name
-            return getattr(Key, key_data['name'], Key.f6)
-        elif key_data['type'] == 'char':
-            return KeyCode.from_char(key_data['char'])
+            name = key_data.get('name', 'f6')
+            if not isinstance(name, str):
+                return Key.f6
+            return getattr(Key, name, Key.f6)
+        elif key_type == 'char':
+            char = key_data.get('char')
+            if char and isinstance(char, str) and len(char) == 1:
+                return KeyCode.from_char(char)
+            return Key.f6  # fallback if char is missing or invalid
         else:
             return Key.f6  # fallback
 
     def setup_ui(self):
+        # Create menu bar
+        menubar = tk.Menu(self.window)
+        self.window.config(menu=menubar)
+
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Help", menu=help_menu)
+        help_menu.add_command(label="Check for Updates", command=self._check_for_updates_clicked)
+        help_menu.add_separator()
+        help_menu.add_command(label="About", command=self._show_about)
+
         main_frame = ttk.Frame(self.window, padding="20")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
@@ -265,7 +322,10 @@ class DualAutoClicker:
                 raise ValueError(f"Interval must be at least {MIN_INTERVAL}s (prevents system overload)")
             if interval_value > MAX_INTERVAL:
                 raise ValueError(f"Interval must be at most {MAX_INTERVAL}s")
-            setattr(self, target_attr, interval_value)
+            # Acquire the appropriate lock before modifying interval
+            lock = self.clicker1_lock if target_attr == 'clicker1_interval' else self.clicker2_lock
+            with lock:
+                setattr(self, target_attr, interval_value)
             self.save_config()
             messagebox.showinfo("Success", f"{name} interval updated to {interval_value}s")
         except ValueError as e:
@@ -367,7 +427,9 @@ class DualAutoClicker:
             pass
 
     def toggle_clicker1(self):
-        if self.clicker1_clicking:
+        with self.clicker1_lock:
+            clicking = self.clicker1_clicking
+        if clicking:
             # Stop clicker 1
             self.stop_clicker1()
         else:
@@ -376,7 +438,9 @@ class DualAutoClicker:
             self.start_clicker1()
 
     def toggle_clicker2(self):
-        if self.clicker2_clicking:
+        with self.clicker2_lock:
+            clicking = self.clicker2_clicking
+        if clicking:
             # Stop clicker 2
             self.stop_clicker2()
         else:
@@ -457,20 +521,176 @@ class DualAutoClicker:
             time.sleep(interval)
 
     def start_keyboard_listener(self):
+        # Stop existing listener first if present to prevent resource leak
+        if self.keyboard_listener:
+            try:
+                self.keyboard_listener.stop()
+            except Exception:
+                pass
         self.keyboard_listener = keyboard.Listener(on_press=self.on_hotkey_press)
         self.keyboard_listener.start()
 
     def stop_keyboard_listener(self):
         if self.keyboard_listener:
-            self.keyboard_listener.stop()
+            try:
+                self.keyboard_listener.stop()
+            except Exception:
+                pass
 
     def on_closing(self):
         self.stop_clicker1()
         self.stop_clicker2()
         self.stop_keyboard_listener()
         if self.hotkey_capture_listener:
-            self.hotkey_capture_listener.stop()
+            try:
+                self.hotkey_capture_listener.stop()
+            except Exception:
+                pass
+        # Wait for clicker threads to finish to ensure clean shutdown
+        if self.clicker1_thread:
+            if self.clicker1_thread.is_alive():
+                self.clicker1_thread.join(timeout=1.0)
+            if self.clicker1_thread.is_alive():
+                print("Warning: Clicker 1 thread did not exit cleanly")
+        if self.clicker2_thread:
+            if self.clicker2_thread.is_alive():
+                self.clicker2_thread.join(timeout=1.0)
+            if self.clicker2_thread.is_alive():
+                print("Warning: Clicker 2 thread did not exit cleanly")
         self.window.destroy()
+
+    # Update feature methods
+    def _show_about(self):
+        """Show about dialog."""
+        messagebox.showinfo(
+            "About",
+            f"Dual AutoClicker v{__version__}\n\n"
+            "A cross-platform dual autoclicker with configurable hotkeys.\n\n"
+            "https://github.com/jj-repository/autoclicker"
+        )
+
+    def _version_newer(self, latest, current):
+        """Compare version strings to check if latest is newer than current."""
+        try:
+            latest_parts = tuple(map(int, latest.split('.')))
+            current_parts = tuple(map(int, current.split('.')))
+            return latest_parts > current_parts
+        except (ValueError, AttributeError):
+            return False
+
+    def _check_for_updates_clicked(self):
+        """Handle Check for Updates menu click."""
+        threading.Thread(target=self._check_for_updates, args=(False,), daemon=True).start()
+
+    def _check_for_updates(self, silent=True):
+        """Check GitHub for new version."""
+        import urllib.request
+        import urllib.error
+
+        try:
+            request = urllib.request.Request(
+                GITHUB_API_LATEST,
+                headers={'User-Agent': f'DualAutoClicker/{__version__}'}
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                data = json.loads(response.read().decode())
+
+            latest_version = data.get('tag_name', '').lstrip('v')
+
+            if not latest_version:
+                raise ValueError("No version tag found in release")
+
+            if self._version_newer(latest_version, __version__):
+                self.window.after(0, lambda: self._show_update_dialog(latest_version, data))
+            elif not silent:
+                self.window.after(0, lambda: messagebox.showinfo(
+                    "Up to Date",
+                    f"You are running the latest version (v{__version__})."
+                ))
+
+        except urllib.error.URLError as e:
+            if not silent:
+                self.window.after(0, lambda: messagebox.showerror(
+                    "Update Error",
+                    f"Failed to check for updates:\n{e}"
+                ))
+        except Exception as e:
+            if not silent:
+                self.window.after(0, lambda: messagebox.showerror(
+                    "Update Error",
+                    f"Failed to check for updates:\n{e}"
+                ))
+
+    def _show_update_dialog(self, latest_version, release_data):
+        """Show update available dialog with options."""
+        dialog = tk.Toplevel(self.window)
+        dialog.title("Update Available")
+        dialog.transient(self.window)
+        dialog.grab_set()
+        dialog.geometry("400x200")
+        dialog.resizable(False, False)
+
+        msg = f"A new version is available!\n\nCurrent: v{__version__}\nLatest: v{latest_version}\n\nWould you like to update?"
+        ttk.Label(dialog, text=msg, justify=tk.CENTER, wraplength=350).pack(pady=20)
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=10)
+
+        def update_now():
+            dialog.destroy()
+            threading.Thread(target=self._apply_update, args=(release_data,), daemon=True).start()
+
+        def open_releases():
+            dialog.destroy()
+            import webbrowser
+            webbrowser.open(GITHUB_RELEASES_URL)
+
+        ttk.Button(btn_frame, text="Update Now", command=update_now).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Open Releases", command=open_releases).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Later", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() - dialog.winfo_width()) // 2
+        y = (dialog.winfo_screenheight() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+    def _apply_update(self, release_data):
+        """Download and apply update."""
+        import urllib.request
+        import urllib.error
+        import shutil
+        import tempfile
+
+        try:
+            tag_name = release_data.get('tag_name', 'main')
+            download_url = f"{GITHUB_RAW_URL}/{tag_name}/autoclicker.py"
+
+            request = urllib.request.Request(
+                download_url,
+                headers={'User-Agent': f'DualAutoClicker/{__version__}'}
+            )
+
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.py', delete=False) as tmp_file:
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    tmp_file.write(response.read())
+                tmp_path = tmp_file.name
+
+            current_script = Path(__file__).resolve()
+            backup_path = current_script.with_suffix('.py.backup')
+            shutil.copy2(current_script, backup_path)
+
+            shutil.move(tmp_path, current_script)
+
+            self.window.after(0, lambda: messagebox.showinfo(
+                "Update Complete",
+                "Update downloaded successfully!\n\nPlease restart the application to apply the update."
+            ))
+
+        except Exception as e:
+            self.window.after(0, lambda: messagebox.showerror(
+                "Update Failed",
+                f"Failed to download update:\n{e}"
+            ))
 
     def run(self):
         self.window.mainloop()
