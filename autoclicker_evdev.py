@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+"""
+Dual AutoClicker + Key Presser - Linux evdev Version
+
+This version uses evdev for low-level input simulation via the Linux kernel.
+Works on Linux (X11 and Wayland) with games and applications that don't
+detect higher-level input libraries.
+
+Use this version when:
+- Running on Linux (X11 or Wayland)
+- Games/apps don't detect pynput mouse clicks
+- You need keyboard key pressing automation
+
+Requirements:
+- Linux only (evdev is Linux-specific)
+- Requires uinput access (run with sudo or add user to 'input' group)
+- Install: pip install -r requirements-linux.txt
+
+For cross-platform support (Windows/macOS), use autoclicker.py instead.
+"""
 import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
@@ -139,8 +158,12 @@ class DualAutoClicker:
                 self.keypresser_hotkey = self._deserialize_key(config['keypresser_hotkey'])
                 self.keypresser_hotkey_display = config.get('keypresser_hotkey_display', 'F8')
 
-            # Load keypresser target key
-            self.keypresser_target_key = config.get('keypresser_target_key', self.keypresser_target_key)
+            # Load keypresser target key with validation
+            target_key = config.get('keypresser_target_key', self.keypresser_target_key)
+            if isinstance(target_key, int) and 0 <= target_key <= 255:
+                self.keypresser_target_key = target_key
+            else:
+                print(f"Warning: Invalid keypresser_target_key in config, using default")
             self.keypresser_target_key_display = config.get('keypresser_target_key_display', 'Space')
 
             # Load emergency stop hotkey
@@ -148,6 +171,10 @@ class DualAutoClicker:
                 self.emergency_stop_hotkey = self._deserialize_key(config['emergency_stop_hotkey'])
                 self.emergency_stop_hotkey_display = config.get('emergency_stop_hotkey_display', 'F9')
 
+        except json.JSONDecodeError as e:
+            print(f"Error: Config file is corrupted: {e}")
+        except (IOError, OSError) as e:
+            print(f"Error: Cannot read config file: {e}")
         except Exception as e:
             print(f"Error loading config: {e}")
 
@@ -190,11 +217,26 @@ class DualAutoClicker:
 
     def _deserialize_key(self, key_data):
         """Convert JSON data back to a pynput key"""
-        if key_data['type'] == 'special':
+        # Validate that key_data is a dict with expected structure
+        if not isinstance(key_data, dict):
+            print(f"Warning: Invalid hotkey data type, expected dict, got {type(key_data).__name__}")
+            return Key.f6
+
+        key_type = key_data.get('type', 'special')
+        if not isinstance(key_type, str):
+            return Key.f6
+
+        if key_type == 'special':
             # Get the Key attribute by name
-            return getattr(Key, key_data['name'], Key.f6)
-        elif key_data['type'] == 'char':
-            return KeyCode.from_char(key_data['char'])
+            name = key_data.get('name', 'f6')
+            if not isinstance(name, str):
+                return Key.f6
+            return getattr(Key, name, Key.f6)
+        elif key_type == 'char':
+            char = key_data.get('char')
+            if char and isinstance(char, str) and len(char) == 1:
+                return KeyCode.from_char(char)
+            return Key.f6  # fallback if char is missing or invalid
         else:
             return Key.f6  # fallback
 
@@ -401,7 +443,18 @@ class DualAutoClicker:
                 raise ValueError(f"Interval must be at least {MIN_INTERVAL}s (prevents system overload)")
             if interval_value > MAX_INTERVAL:
                 raise ValueError(f"Interval must be at most {MAX_INTERVAL}s")
-            setattr(self, target_attr, interval_value)
+            # Use appropriate lock when modifying interval values
+            if target_attr == 'clicker1_interval':
+                with self.clicker1_lock:
+                    setattr(self, target_attr, interval_value)
+            elif target_attr == 'clicker2_interval':
+                with self.clicker2_lock:
+                    setattr(self, target_attr, interval_value)
+            elif target_attr == 'keypresser_interval':
+                with self.keypresser_lock:
+                    setattr(self, target_attr, interval_value)
+            else:
+                setattr(self, target_attr, interval_value)
             self.save_config()
             messagebox.showinfo("Success", f"{name} interval updated to {interval_value}s")
         except ValueError as e:
@@ -477,15 +530,15 @@ class DualAutoClicker:
         if tk_key.startswith('F') and tk_key[1:].isdigit():
             f_num = int(tk_key[1:])
             if 1 <= f_num <= 12:
-                return getattr(e, f'KEY_F{f_num}')
+                return getattr(e, f'KEY_F{f_num}', e.KEY_SPACE)
 
         # Handle letter keys
         if len(tk_key) == 1 and tk_key.isalpha():
-            return getattr(e, f'KEY_{tk_key.upper()}')
+            return getattr(e, f'KEY_{tk_key.upper()}', e.KEY_SPACE)
 
         # Handle number keys
         if len(tk_key) == 1 and tk_key.isdigit():
-            return getattr(e, f'KEY_{tk_key}')
+            return getattr(e, f'KEY_{tk_key}', e.KEY_SPACE)
 
         # Default to spacebar if unknown
         return e.KEY_SPACE
@@ -650,7 +703,9 @@ class DualAutoClicker:
             pass
 
     def toggle_clicker1(self):
-        if self.clicker1_clicking:
+        with self.clicker1_lock:
+            clicking = self.clicker1_clicking
+        if clicking:
             # Stop clicker 1
             self.stop_clicker1()
         else:
@@ -659,7 +714,9 @@ class DualAutoClicker:
             self.start_clicker1()
 
     def toggle_clicker2(self):
-        if self.clicker2_clicking:
+        with self.clicker2_lock:
+            clicking = self.clicker2_clicking
+        if clicking:
             # Stop clicker 2
             self.stop_clicker2()
         else:
@@ -791,12 +848,21 @@ class DualAutoClicker:
         # Visual feedback could be added here if desired
 
     def start_keyboard_listener(self):
+        # Stop existing listener first if present to prevent resource leak
+        if self.keyboard_listener:
+            try:
+                self.keyboard_listener.stop()
+            except Exception:
+                pass
         self.keyboard_listener = keyboard.Listener(on_press=self.on_hotkey_press)
         self.keyboard_listener.start()
 
     def stop_keyboard_listener(self):
         if self.keyboard_listener:
-            self.keyboard_listener.stop()
+            try:
+                self.keyboard_listener.stop()
+            except Exception:
+                pass
 
     def on_closing(self):
         self.stop_clicker1()
@@ -804,11 +870,37 @@ class DualAutoClicker:
         self.stop_keypresser()
         self.stop_keyboard_listener()
         if self.hotkey_capture_listener:
-            self.hotkey_capture_listener.stop()
+            try:
+                self.hotkey_capture_listener.stop()
+            except Exception:
+                pass
+        # Wait for threads to finish to ensure clean shutdown
+        if self.clicker1_thread:
+            if self.clicker1_thread.is_alive():
+                self.clicker1_thread.join(timeout=1.0)
+            if self.clicker1_thread.is_alive():
+                print("Warning: Clicker 1 thread did not exit cleanly")
+        if self.clicker2_thread:
+            if self.clicker2_thread.is_alive():
+                self.clicker2_thread.join(timeout=1.0)
+            if self.clicker2_thread.is_alive():
+                print("Warning: Clicker 2 thread did not exit cleanly")
+        if self.keypresser_thread:
+            if self.keypresser_thread.is_alive():
+                self.keypresser_thread.join(timeout=1.0)
+            if self.keypresser_thread.is_alive():
+                print("Warning: Key presser thread did not exit cleanly")
+        # Clean up virtual devices
         if self.virtual_mouse:
-            self.virtual_mouse.close()
+            try:
+                self.virtual_mouse.close()
+            except Exception as e:
+                print(f"Warning: Error closing virtual mouse: {e}")
         if self.virtual_keyboard:
-            self.virtual_keyboard.close()
+            try:
+                self.virtual_keyboard.close()
+            except Exception as e:
+                print(f"Warning: Error closing virtual keyboard: {e}")
         self.window.destroy()
 
     def run(self):
@@ -816,11 +908,20 @@ class DualAutoClicker:
 
 
 if __name__ == "__main__":
-    # Check if running with root/sudo
-    if os.geteuid() != 0:
+    import sys
+    import platform
+
+    # Verify we're on Linux (evdev is Linux-only)
+    if platform.system() != 'Linux':
+        print("ERROR: autoclicker_evdev.py requires Linux (evdev is Linux-only)")
+        print("Use autoclicker.py for cross-platform support")
+        sys.exit(1)
+
+    # Check if running with root/sudo (required for evdev)
+    if hasattr(os, 'geteuid') and os.geteuid() != 0:
         print("ERROR: This script must be run with sudo/root privileges")
         print("Usage: sudo python3 autoclicker_evdev.py")
-        exit(1)
+        sys.exit(1)
 
     app = DualAutoClicker()
     app.run()
