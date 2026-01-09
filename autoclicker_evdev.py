@@ -85,6 +85,7 @@ class DualAutoClicker:
         self.virtual_keyboard = None  # Will be initialized when needed
         self.keyboard_listener = None
         self.hotkey_capture_listener = None
+        self.hotkey_capture_lock = threading.Lock()  # Lock for hotkey capture state
         self.listening_for_hotkey = False
         self.hotkey_target = None  # "clicker1", "clicker2", "keypresser", or "emergency_stop"
 
@@ -545,11 +546,12 @@ class DualAutoClicker:
         return e.KEY_SPACE
 
     def start_hotkey_capture(self, target):
-        if self.listening_for_hotkey:
-            return
+        with self.hotkey_capture_lock:
+            if self.listening_for_hotkey:
+                return
 
-        self.listening_for_hotkey = True
-        self.hotkey_target = target
+            self.listening_for_hotkey = True
+            self.hotkey_target = target
 
         if target == "clicker1":
             self.hotkey1_button.config(text="Press a key...")
@@ -564,45 +566,48 @@ class DualAutoClicker:
         self.stop_keyboard_listener()
 
         # Start a temporary listener to capture the hotkey
-        self.hotkey_capture_listener = keyboard.Listener(on_press=self.capture_hotkey)
-        self.hotkey_capture_listener.start()
+        with self.hotkey_capture_lock:
+            self.hotkey_capture_listener = keyboard.Listener(on_press=self.capture_hotkey)
+            self.hotkey_capture_listener.start()
 
     def capture_hotkey(self, key):
-        if not self.listening_for_hotkey:
-            return
+        with self.hotkey_capture_lock:
+            if not self.listening_for_hotkey:
+                return
 
-        # Stop the capture listener
-        if self.hotkey_capture_listener:
-            self.hotkey_capture_listener.stop()
-            self.hotkey_capture_listener = None
+            # Stop the capture listener
+            if self.hotkey_capture_listener:
+                self.hotkey_capture_listener.stop()
+                self.hotkey_capture_listener = None
 
-        self.listening_for_hotkey = False
+            self.listening_for_hotkey = False
+            target = self.hotkey_target
 
         # Set the new hotkey
         key_display = self.get_key_display_name(key)
 
-        if self.hotkey_target == "clicker1":
+        if target == "clicker1":
             self.clicker1_hotkey = key
             self.clicker1_hotkey_display = key_display
-            self.hotkey1_button.config(text=f"Current: {key_display}")
-        elif self.hotkey_target == "clicker2":
+            self.window.after(0, lambda: self.hotkey1_button.config(text=f"Current: {key_display}"))
+        elif target == "clicker2":
             self.clicker2_hotkey = key
             self.clicker2_hotkey_display = key_display
-            self.hotkey2_button.config(text=f"Current: {key_display}")
-        elif self.hotkey_target == "keypresser":
+            self.window.after(0, lambda: self.hotkey2_button.config(text=f"Current: {key_display}"))
+        elif target == "keypresser":
             self.keypresser_hotkey = key
             self.keypresser_hotkey_display = key_display
-            self.keypresser_hotkey_button.config(text=f"Current: {key_display}")
+            self.window.after(0, lambda: self.keypresser_hotkey_button.config(text=f"Current: {key_display}"))
         else:  # emergency_stop
             self.emergency_stop_hotkey = key
             self.emergency_stop_hotkey_display = key_display
-            self.emergency_stop_button.config(text=f"Current: {key_display}")
+            self.window.after(0, lambda: self.emergency_stop_button.config(text=f"Current: {key_display}"))
 
         # Save the new configuration
         self.save_config()
 
         # Restart the main keyboard listener
-        self.start_keyboard_listener()
+        self.window.after(0, self.start_keyboard_listener)
 
     def init_virtual_mouse(self):
         """Initialize the virtual mouse device using evdev"""
@@ -700,7 +705,9 @@ class DualAutoClicker:
             # Check keypresser hotkey
             elif key == self.keypresser_hotkey:
                 self.toggle_keypresser()
-        except AttributeError:
+        except AttributeError as e:
+            # Key comparison failed - likely a key object without expected attributes
+            # This can happen with some special key combinations
             pass
 
     def toggle_clicker1(self):

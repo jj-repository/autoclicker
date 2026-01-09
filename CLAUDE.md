@@ -126,6 +126,13 @@ python -m pytest test_autoclicker.py -v
 python -m pytest test_autoclicker.py --tb=short  # Shorter output
 ```
 
+## Security Features
+
+- **Download size validation**: MAX_DOWNLOAD_SIZE (5MB) limit for update downloads
+- **SHA256 checksum verification**: Required for all updates
+- **Backup before update**: Creates `.py.backup` before applying updates
+- **Hotkey capture lock**: Thread-safe hotkey capture state (evdev version)
+
 ## Known Issues / Technical Debt
 
 1. **evdev version requires root**: Needs uinput access, could use udev rules instead

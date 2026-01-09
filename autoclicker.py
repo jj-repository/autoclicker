@@ -35,6 +35,7 @@ MIN_INTERVAL = 0.01  # Minimum interval: 10ms (100 clicks/sec max)
 MAX_INTERVAL = 60.0  # Maximum interval: 60 seconds
 DEFAULT_CLICKER1_INTERVAL = 0.1
 DEFAULT_CLICKER2_INTERVAL = 0.5
+MAX_DOWNLOAD_SIZE = 5 * 1024 * 1024  # 5MB max download size for updates
 
 
 class DualAutoClicker:
@@ -459,7 +460,9 @@ class DualAutoClicker:
             # Check clicker 2 hotkey
             elif key == self.clicker2_hotkey:
                 self.toggle_clicker2()
-        except AttributeError:
+        except AttributeError as e:
+            # Key comparison failed - likely a key object without expected attributes
+            # This can happen with some special key combinations
             pass
 
     def toggle_clicker1(self):
@@ -796,10 +799,34 @@ class DualAutoClicker:
                     return
                 raise
 
-            # Download the update file to memory first
+            # Download the update file to memory first with size validation
             request = urllib.request.Request(download_url, headers=headers)
             with urllib.request.urlopen(request, timeout=60) as response:
-                content = response.read()
+                # Check Content-Length header before reading
+                content_length = response.headers.get('Content-Length')
+                if content_length:
+                    try:
+                        size = int(content_length)
+                        if size > MAX_DOWNLOAD_SIZE:
+                            self._safe_after(0, lambda: messagebox.showerror(
+                                "Update Failed",
+                                f"Update file too large ({size / 1024 / 1024:.1f}MB).\n"
+                                f"Maximum allowed: {MAX_DOWNLOAD_SIZE / 1024 / 1024:.1f}MB\n\n"
+                                "This may indicate a compromised update. Please download manually."
+                            ))
+                            return
+                    except ValueError:
+                        pass  # Invalid Content-Length, proceed with caution
+
+                # Read with size limit
+                content = response.read(MAX_DOWNLOAD_SIZE + 1)
+                if len(content) > MAX_DOWNLOAD_SIZE:
+                    self._safe_after(0, lambda: messagebox.showerror(
+                        "Update Failed",
+                        f"Update file exceeds maximum size ({MAX_DOWNLOAD_SIZE / 1024 / 1024:.1f}MB).\n\n"
+                        "This may indicate a compromised update. Please download manually."
+                    ))
+                    return
 
             # CRITICAL: Verify checksum BEFORE any file operations
             sha256_hash = hashlib.sha256(content).hexdigest().lower()
