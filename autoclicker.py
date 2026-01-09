@@ -50,6 +50,7 @@ class DualAutoClicker:
         # Thread locks for thread-safe state access
         self.clicker1_lock = threading.Lock()
         self.clicker2_lock = threading.Lock()
+        self.hotkey_capture_lock = threading.Lock()
 
         # Clicker 1 state (defaults)
         self.clicker1_hotkey = Key.f6
@@ -76,6 +77,9 @@ class DualAutoClicker:
         self.last_hotkey_time = {}
         self.hotkey_cooldown = 0.2  # 200ms cooldown between hotkey presses
 
+        # Update settings
+        self.auto_check_updates = True  # Default: check for updates on startup
+
         # UI elements
         self.interval1_var = None
         self.interval2_var = None
@@ -93,8 +97,9 @@ class DualAutoClicker:
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         # Check for updates on startup (delay to let UI initialize)
-        self.window.after(2000, lambda: threading.Thread(
-            target=self._check_for_updates, args=(True,), daemon=True).start())
+        if self.auto_check_updates:
+            self.window.after(2000, lambda: threading.Thread(
+                target=self._check_for_updates, args=(True,), daemon=True).start())
 
     def _validate_interval(self, interval, default):
         """Validate interval is within acceptable bounds"""
@@ -136,6 +141,10 @@ class DualAutoClicker:
                 display = config.get('clicker2_hotkey_display', 'F7')
                 self.clicker2_hotkey_display = display if isinstance(display, str) else 'F7'
 
+            # Load auto update setting
+            if 'auto_check_updates' in config:
+                self.auto_check_updates = bool(config.get('auto_check_updates', True))
+
         except json.JSONDecodeError as e:
             print(f"Error: Config file is corrupted: {e}")
         except (IOError, OSError) as e:
@@ -156,6 +165,7 @@ class DualAutoClicker:
                 'clicker1_hotkey_display': self.clicker1_hotkey_display,
                 'clicker2_hotkey': self._serialize_key(self.clicker2_hotkey),
                 'clicker2_hotkey_display': self.clicker2_hotkey_display,
+                'auto_check_updates': self.auto_check_updates,
             }
 
             with open(self.config_path, 'w') as f:
@@ -206,6 +216,14 @@ class DualAutoClicker:
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
         help_menu.add_command(label="Check for Updates", command=self._check_for_updates_clicked)
+
+        # Auto-check updates toggle
+        self.auto_check_var = tk.BooleanVar(value=self.auto_check_updates)
+        help_menu.add_checkbutton(
+            label="Check for Updates on Startup",
+            variable=self.auto_check_var,
+            command=self._toggle_auto_check_updates
+        )
         help_menu.add_separator()
         help_menu.add_command(label="About", command=self._show_about)
 
@@ -338,11 +356,12 @@ class DualAutoClicker:
         self._apply_interval(self.interval2_var, 'clicker2_interval', 'Clicker 2')
 
     def start_hotkey_capture(self, target):
-        if self.listening_for_hotkey:
-            return
+        with self.hotkey_capture_lock:
+            if self.listening_for_hotkey:
+                return
 
-        self.listening_for_hotkey = True
-        self.hotkey_target = target
+            self.listening_for_hotkey = True
+            self.hotkey_target = target
 
         if target == "clicker1":
             self.hotkey1_button.config(text="Press a key...")
@@ -353,37 +372,42 @@ class DualAutoClicker:
         self.stop_keyboard_listener()
 
         # Start a temporary listener to capture the hotkey
-        self.hotkey_capture_listener = keyboard.Listener(on_press=self.capture_hotkey)
-        self.hotkey_capture_listener.start()
+        with self.hotkey_capture_lock:
+            self.hotkey_capture_listener = keyboard.Listener(on_press=self.capture_hotkey)
+            self.hotkey_capture_listener.start()
 
     def capture_hotkey(self, key):
-        if not self.listening_for_hotkey:
-            return
+        with self.hotkey_capture_lock:
+            if not self.listening_for_hotkey:
+                return
 
-        # Stop the capture listener
-        if self.hotkey_capture_listener:
-            self.hotkey_capture_listener.stop()
-            self.hotkey_capture_listener = None
+            # Stop the capture listener
+            if self.hotkey_capture_listener:
+                self.hotkey_capture_listener.stop()
+                self.hotkey_capture_listener = None
 
-        self.listening_for_hotkey = False
+            self.listening_for_hotkey = False
+            target = self.hotkey_target
 
         # Set the new hotkey
         key_display = self.get_key_display_name(key)
 
-        if self.hotkey_target == "clicker1":
+        if target == "clicker1":
             self.clicker1_hotkey = key
             self.clicker1_hotkey_display = key_display
-            self.hotkey1_button.config(text=f"Current: {key_display}")
+            # Schedule UI update on main thread
+            self.window.after(0, lambda: self.hotkey1_button.config(text=f"Current: {key_display}"))
         else:
             self.clicker2_hotkey = key
             self.clicker2_hotkey_display = key_display
-            self.hotkey2_button.config(text=f"Current: {key_display}")
+            # Schedule UI update on main thread
+            self.window.after(0, lambda: self.hotkey2_button.config(text=f"Current: {key_display}"))
 
-        # Save the new configuration
+        # Save the new configuration (thread-safe file write)
         self.save_config()
 
-        # Restart the main keyboard listener
-        self.start_keyboard_listener()
+        # Restart the main keyboard listener on main thread
+        self.window.after(0, self.start_keyboard_listener)
 
     def perform_click(self):
         """Perform a single left mouse click using pynput"""
@@ -582,6 +606,11 @@ class DualAutoClicker:
         """Handle Check for Updates menu click."""
         threading.Thread(target=self._check_for_updates, args=(False,), daemon=True).start()
 
+    def _toggle_auto_check_updates(self):
+        """Toggle automatic update checking on startup."""
+        self.auto_check_updates = self.auto_check_var.get()
+        self.save_config()
+
     def _check_for_updates(self, silent=True):
         """Check GitHub for new version."""
         import urllib.request
@@ -655,26 +684,82 @@ class DualAutoClicker:
         dialog.geometry(f"+{x}+{y}")
 
     def _apply_update(self, release_data):
-        """Download and apply update."""
+        """Download and apply update with SHA256 checksum verification."""
         import urllib.request
         import urllib.error
         import shutil
         import tempfile
+        import hashlib
 
         try:
             tag_name = release_data.get('tag_name', 'main')
             download_url = f"{GITHUB_RAW_URL}/{tag_name}/autoclicker.py"
+            checksum_url = f"{GITHUB_RAW_URL}/{tag_name}/autoclicker.py.sha256"
 
-            request = urllib.request.Request(
-                download_url,
-                headers={'User-Agent': f'DualAutoClicker/{__version__}'}
-            )
+            headers = {'User-Agent': f'DualAutoClicker/{__version__}'}
+
+            # First, try to download the checksum file
+            expected_checksum = None
+            try:
+                checksum_request = urllib.request.Request(checksum_url, headers=headers)
+                with urllib.request.urlopen(checksum_request, timeout=30) as response:
+                    checksum_content = response.read().decode().strip()
+                    # Format: "sha256hash  filename" or just "sha256hash"
+                    expected_checksum = checksum_content.split()[0].lower()
+                    if len(expected_checksum) != 64:
+                        raise ValueError("Invalid checksum format")
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    # Checksum file doesn't exist - warn user but allow to proceed
+                    result = self.window.after(0, lambda: messagebox.askyesno(
+                        "Security Warning",
+                        "No checksum file found for this release.\n\n"
+                        "This means the update cannot be verified for integrity.\n\n"
+                        "It is recommended to download manually from GitHub Releases.\n\n"
+                        "Continue anyway (not recommended)?"
+                    ))
+                    # For safety, we just show the warning and abort
+                    self.window.after(0, lambda: messagebox.showwarning(
+                        "Update Aborted",
+                        "Update aborted for security reasons.\n\n"
+                        "Please download the update manually from:\n"
+                        f"{GITHUB_RELEASES_URL}"
+                    ))
+                    return
+                raise
+
+            # Download the update file
+            request = urllib.request.Request(download_url, headers=headers)
 
             with tempfile.NamedTemporaryFile(mode='wb', suffix='.py', delete=False) as tmp_file:
                 with urllib.request.urlopen(request, timeout=60) as response:
-                    tmp_file.write(response.read())
+                    content = response.read()
+                    tmp_file.write(content)
                 tmp_path = tmp_file.name
 
+            # Calculate SHA256 checksum of downloaded file
+            sha256_hash = hashlib.sha256(content).hexdigest().lower()
+
+            # Verify checksum
+            if sha256_hash != expected_checksum:
+                # Delete the potentially compromised file
+                try:
+                    Path(tmp_path).unlink()
+                except:
+                    pass
+
+                self.window.after(0, lambda: messagebox.showerror(
+                    "Security Error",
+                    "CHECKSUM VERIFICATION FAILED!\n\n"
+                    f"Expected: {expected_checksum}\n"
+                    f"Got: {sha256_hash}\n\n"
+                    "The downloaded file may have been tampered with.\n"
+                    "Update has been aborted for your safety.\n\n"
+                    "Please report this issue on GitHub."
+                ))
+                return
+
+            # Checksum verified - apply update
             current_script = Path(__file__).resolve()
             backup_path = current_script.with_suffix('.py.backup')
             shutil.copy2(current_script, backup_path)
@@ -683,7 +768,9 @@ class DualAutoClicker:
 
             self.window.after(0, lambda: messagebox.showinfo(
                 "Update Complete",
-                "Update downloaded successfully!\n\nPlease restart the application to apply the update."
+                "Update downloaded and verified successfully!\n\n"
+                f"Checksum: {sha256_hash[:16]}...\n\n"
+                "Please restart the application to apply the update."
             ))
 
         except Exception as e:

@@ -25,6 +25,7 @@ import time
 import json
 import os
 from pathlib import Path
+from typing import Optional, Dict, Any, Union
 from pynput import keyboard
 from pynput.keyboard import Key, KeyCode
 from evdev import UInput, ecodes as e
@@ -112,8 +113,8 @@ class DualAutoClicker:
 
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-    def _validate_interval(self, interval, default):
-        """Validate interval is within acceptable bounds"""
+    def _validate_interval(self, interval: Any, default: float) -> float:
+        """Validate interval is within acceptable bounds."""
         try:
             interval_float = float(interval)
             if MIN_INTERVAL <= interval_float <= MAX_INTERVAL:
@@ -206,8 +207,8 @@ class DualAutoClicker:
         except Exception as e:
             print(f"Error saving config: {e}")
 
-    def _serialize_key(self, key):
-        """Convert a pynput key to a JSON-serializable format"""
+    def _serialize_key(self, key: Union[Key, KeyCode]) -> Dict[str, str]:
+        """Convert a pynput key to a JSON-serializable format."""
         if hasattr(key, 'name'):
             return {'type': 'special', 'name': key.name}
         elif hasattr(key, 'char'):
@@ -215,8 +216,8 @@ class DualAutoClicker:
         else:
             return {'type': 'special', 'name': 'f6'}  # fallback
 
-    def _deserialize_key(self, key_data):
-        """Convert JSON data back to a pynput key"""
+    def _deserialize_key(self, key_data: Any) -> Union[Key, KeyCode]:
+        """Convert JSON data back to a pynput key."""
         # Validate that key_data is a dict with expected structure
         if not isinstance(key_data, dict):
             print(f"Warning: Invalid hotkey data type, expected dict, got {type(key_data).__name__}")
@@ -495,8 +496,8 @@ class DualAutoClicker:
         dialog.bind("<Key>", on_key_press)
         dialog.focus_set()
 
-    def _tk_key_to_evdev(self, tk_key):
-        """Convert tkinter key name to evdev keycode"""
+    def _tk_key_to_evdev(self, tk_key: str) -> int:
+        """Convert tkinter key name to evdev keycode."""
         # Common key mappings
         key_map = {
             'space': e.KEY_SPACE,
@@ -797,7 +798,11 @@ class DualAutoClicker:
             time.sleep(interval)
 
     def toggle_keypresser(self):
-        if self.keypresser_pressing:
+        # Thread-safe: read state while holding lock to prevent race condition
+        with self.keypresser_lock:
+            is_pressing = self.keypresser_pressing
+
+        if is_pressing:
             # Stop keypresser
             self.stop_keypresser()
         else:
