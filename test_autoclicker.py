@@ -415,6 +415,111 @@ class TestConfigPersistence(unittest.TestCase):
                 pass  # Expected
 
 
+class TestVersionComparison(unittest.TestCase):
+    """Tests for _version_newer method"""
+
+    def _version_newer(self, latest, current):
+        """
+        Replicate the version comparison logic for testing.
+        Handles semantic versioning with pre-release suffixes.
+        """
+        def parse_version(version_str):
+            if not version_str or not isinstance(version_str, str):
+                return (0, 0, 0, '', 0)
+
+            version_str = version_str.lstrip('v')
+
+            if '-' in version_str:
+                main_part, pre_release = version_str.split('-', 1)
+            else:
+                main_part, pre_release = version_str, ''
+
+            parts = []
+            for part in main_part.split('.'):
+                try:
+                    parts.append(int(part))
+                except ValueError:
+                    digits = ''
+                    for c in part:
+                        if c.isdigit():
+                            digits += c
+                        else:
+                            break
+                    parts.append(int(digits) if digits else 0)
+
+            while len(parts) < 3:
+                parts.append(0)
+
+            pre_release_num = 0
+            if pre_release:
+                digits = ''.join(c for c in pre_release if c.isdigit())
+                pre_release_num = int(digits) if digits else 0
+
+            return (parts[0], parts[1], parts[2], pre_release == '', pre_release_num)
+
+        try:
+            latest_parsed = parse_version(latest)
+            current_parsed = parse_version(current)
+            return latest_parsed > current_parsed
+        except Exception:
+            return False
+
+    def test_basic_comparison(self):
+        """Test basic version comparisons"""
+        self.assertTrue(self._version_newer("1.1.0", "1.0.0"))
+        self.assertTrue(self._version_newer("2.0.0", "1.9.9"))
+        self.assertTrue(self._version_newer("1.0.1", "1.0.0"))
+        self.assertFalse(self._version_newer("1.0.0", "1.0.0"))
+        self.assertFalse(self._version_newer("1.0.0", "1.0.1"))
+
+    def test_pre_release_versions(self):
+        """Test pre-release version handling"""
+        # Stable > pre-release with same version
+        self.assertTrue(self._version_newer("1.4.0", "1.4.0-beta"))
+        self.assertTrue(self._version_newer("1.4.0", "1.4.0-alpha"))
+        self.assertTrue(self._version_newer("1.4.0", "1.4.0-rc1"))
+
+        # Pre-release < stable
+        self.assertFalse(self._version_newer("1.4.0-beta", "1.4.0"))
+
+        # Beta2 > beta1
+        self.assertTrue(self._version_newer("1.4.0-beta2", "1.4.0-beta1"))
+
+    def test_v_prefix(self):
+        """Test version strings with 'v' prefix"""
+        self.assertTrue(self._version_newer("v1.1.0", "v1.0.0"))
+        self.assertTrue(self._version_newer("v1.1.0", "1.0.0"))
+        self.assertTrue(self._version_newer("1.1.0", "v1.0.0"))
+
+    def test_two_part_versions(self):
+        """Test two-part version strings"""
+        self.assertTrue(self._version_newer("1.1", "1.0"))
+        # "1.1.0" and "1.1" are equivalent (both parse to 1.1.0)
+        self.assertFalse(self._version_newer("1.1.0", "1.1"))
+        self.assertFalse(self._version_newer("1.0", "1.0.0"))
+
+    def test_invalid_versions(self):
+        """Test handling of invalid version strings"""
+        # Invalid latest version should not be considered newer
+        self.assertFalse(self._version_newer(None, "1.0.0"))
+        self.assertFalse(self._version_newer("", "1.0.0"))
+        self.assertFalse(self._version_newer("invalid", "1.0.0"))
+        # Any valid version IS newer than invalid/None current
+        self.assertTrue(self._version_newer("1.0.0", None))
+        self.assertTrue(self._version_newer("1.0.0", ""))
+
+    def test_edge_cases(self):
+        """Test edge cases"""
+        # Large version numbers
+        self.assertTrue(self._version_newer("100.0.0", "99.99.99"))
+
+        # Zero versions
+        self.assertTrue(self._version_newer("0.0.1", "0.0.0"))
+
+        # Same pre-release
+        self.assertFalse(self._version_newer("1.0.0-beta", "1.0.0-beta"))
+
+
 class TestConstants(unittest.TestCase):
     """Tests for module constants"""
 

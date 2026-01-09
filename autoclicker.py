@@ -22,7 +22,7 @@ from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"
@@ -100,6 +100,18 @@ class DualAutoClicker:
         if self.auto_check_updates:
             self.window.after(2000, lambda: threading.Thread(
                 target=self._check_for_updates, args=(True,), daemon=True).start())
+
+    def _safe_after(self, delay_ms, callback):
+        """
+        Safely schedule a callback on the main thread.
+        Prevents crashes if window is destroyed before callback runs.
+        """
+        try:
+            if self.window and self.window.winfo_exists():
+                self.window.after(delay_ms, callback)
+        except tk.TclError:
+            # Window was destroyed, ignore the callback
+            pass
 
     def _validate_interval(self, interval, default):
         """Validate interval is within acceptable bounds"""
@@ -395,19 +407,19 @@ class DualAutoClicker:
         if target == "clicker1":
             self.clicker1_hotkey = key
             self.clicker1_hotkey_display = key_display
-            # Schedule UI update on main thread
-            self.window.after(0, lambda: self.hotkey1_button.config(text=f"Current: {key_display}"))
+            # Schedule UI update on main thread safely
+            self._safe_after(0, lambda: self.hotkey1_button.config(text=f"Current: {key_display}"))
         else:
             self.clicker2_hotkey = key
             self.clicker2_hotkey_display = key_display
-            # Schedule UI update on main thread
-            self.window.after(0, lambda: self.hotkey2_button.config(text=f"Current: {key_display}"))
+            # Schedule UI update on main thread safely
+            self._safe_after(0, lambda: self.hotkey2_button.config(text=f"Current: {key_display}"))
 
         # Save the new configuration (thread-safe file write)
         self.save_config()
 
-        # Restart the main keyboard listener on main thread
-        self.window.after(0, self.start_keyboard_listener)
+        # Restart the main keyboard listener on main thread safely
+        self._safe_after(0, self.start_keyboard_listener)
 
     def perform_click(self):
         """Perform a single left mouse click using pynput"""
@@ -518,8 +530,8 @@ class DualAutoClicker:
                 print(f"Error in clicker 1: {e}")
                 with self.clicker1_lock:
                     self.clicker1_clicking = False
-                self.window.after(0, lambda: self.status1_var.set("Error"))
-                self.window.after(0, lambda: self.status1_label.config(fg="orange"))
+                self._safe_after(0, lambda: self.status1_var.set("Error"))
+                self._safe_after(0, lambda: self.status1_label.config(fg="orange"))
                 break
 
             time.sleep(interval)
@@ -538,8 +550,8 @@ class DualAutoClicker:
                 print(f"Error in clicker 2: {e}")
                 with self.clicker2_lock:
                     self.clicker2_clicking = False
-                self.window.after(0, lambda: self.status2_var.set("Error"))
-                self.window.after(0, lambda: self.status2_label.config(fg="orange"))
+                self._safe_after(0, lambda: self.status2_var.set("Error"))
+                self._safe_after(0, lambda: self.status2_label.config(fg="orange"))
                 break
 
             time.sleep(interval)
@@ -594,12 +606,62 @@ class DualAutoClicker:
         )
 
     def _version_newer(self, latest, current):
-        """Compare version strings to check if latest is newer than current."""
+        """
+        Compare version strings to check if latest is newer than current.
+
+        Handles semantic versioning with pre-release suffixes:
+        - "1.4.0" > "1.3.0"
+        - "1.4.0" > "1.4.0-beta"
+        - "1.4.0-beta2" > "1.4.0-beta1"
+        """
+        def parse_version(version_str):
+            """Parse version string into comparable tuple."""
+            if not version_str or not isinstance(version_str, str):
+                return (0, 0, 0, '', 0)
+
+            # Remove 'v' prefix if present
+            version_str = version_str.lstrip('v')
+
+            # Split by hyphen to separate main version from pre-release
+            if '-' in version_str:
+                main_part, pre_release = version_str.split('-', 1)
+            else:
+                main_part, pre_release = version_str, ''
+
+            # Parse main version parts
+            parts = []
+            for part in main_part.split('.'):
+                try:
+                    parts.append(int(part))
+                except ValueError:
+                    # Handle non-numeric parts by extracting leading digits
+                    digits = ''
+                    for c in part:
+                        if c.isdigit():
+                            digits += c
+                        else:
+                            break
+                    parts.append(int(digits) if digits else 0)
+
+            # Pad to at least 3 parts
+            while len(parts) < 3:
+                parts.append(0)
+
+            # Parse pre-release number if present (e.g., "beta2" -> 2)
+            pre_release_num = 0
+            if pre_release:
+                digits = ''.join(c for c in pre_release if c.isdigit())
+                pre_release_num = int(digits) if digits else 0
+
+            # Return tuple: (major, minor, patch, pre_release_str, pre_release_num)
+            # Empty pre_release string sorts AFTER any pre-release (stable > beta)
+            return (parts[0], parts[1], parts[2], pre_release == '', pre_release_num)
+
         try:
-            latest_parts = tuple(map(int, latest.split('.')))
-            current_parts = tuple(map(int, current.split('.')))
-            return latest_parts > current_parts
-        except (ValueError, AttributeError):
+            latest_parsed = parse_version(latest)
+            current_parsed = parse_version(current)
+            return latest_parsed > current_parsed
+        except Exception:
             return False
 
     def _check_for_updates_clicked(self):
@@ -630,22 +692,22 @@ class DualAutoClicker:
                 raise ValueError("No version tag found in release")
 
             if self._version_newer(latest_version, __version__):
-                self.window.after(0, lambda: self._show_update_dialog(latest_version, data))
+                self._safe_after(0, lambda: self._show_update_dialog(latest_version, data))
             elif not silent:
-                self.window.after(0, lambda: messagebox.showinfo(
+                self._safe_after(0, lambda: messagebox.showinfo(
                     "Up to Date",
                     f"You are running the latest version (v{__version__})."
                 ))
 
         except urllib.error.URLError as e:
             if not silent:
-                self.window.after(0, lambda: messagebox.showerror(
+                self._safe_after(0, lambda: messagebox.showerror(
                     "Update Error",
                     f"Failed to check for updates:\n{e}"
                 ))
         except Exception as e:
             if not silent:
-                self.window.after(0, lambda: messagebox.showerror(
+                self._safe_after(0, lambda: messagebox.showerror(
                     "Update Error",
                     f"Failed to check for updates:\n{e}"
                 ))
@@ -684,12 +746,23 @@ class DualAutoClicker:
         dialog.geometry(f"+{x}+{y}")
 
     def _apply_update(self, release_data):
-        """Download and apply update with SHA256 checksum verification."""
+        """
+        Download and apply update with SHA256 checksum verification.
+
+        Security measures:
+        - SHA256 checksum verification BEFORE any file operations
+        - Atomic file replacement using os.replace()
+        - Temp file created in same directory as target for atomic replace
+        - Backup created before replacement
+        - All file operations are verified
+        """
         import urllib.request
         import urllib.error
         import shutil
-        import tempfile
         import hashlib
+        import os as os_module
+
+        tmp_path = None
 
         try:
             tag_name = release_data.get('tag_name', 'main')
@@ -698,7 +771,7 @@ class DualAutoClicker:
 
             headers = {'User-Agent': f'DualAutoClicker/{__version__}'}
 
-            # First, try to download the checksum file
+            # First, download and validate the checksum file
             expected_checksum = None
             try:
                 checksum_request = urllib.request.Request(checksum_url, headers=headers)
@@ -706,49 +779,33 @@ class DualAutoClicker:
                     checksum_content = response.read().decode().strip()
                     # Format: "sha256hash  filename" or just "sha256hash"
                     expected_checksum = checksum_content.split()[0].lower()
-                    if len(expected_checksum) != 64:
-                        raise ValueError("Invalid checksum format")
+                    # Validate checksum format (must be exactly 64 hex characters)
+                    if len(expected_checksum) != 64 or not all(c in '0123456789abcdef' for c in expected_checksum):
+                        raise ValueError("Invalid checksum format - not a valid SHA256 hash")
             except urllib.error.HTTPError as e:
                 if e.code == 404:
-                    # Checksum file doesn't exist - warn user but allow to proceed
-                    result = self.window.after(0, lambda: messagebox.askyesno(
-                        "Security Warning",
+                    # Checksum file doesn't exist - abort for security
+                    self._safe_after(0, lambda: messagebox.showwarning(
+                        "Update Aborted",
                         "No checksum file found for this release.\n\n"
                         "This means the update cannot be verified for integrity.\n\n"
-                        "It is recommended to download manually from GitHub Releases.\n\n"
-                        "Continue anyway (not recommended)?"
-                    ))
-                    # For safety, we just show the warning and abort
-                    self.window.after(0, lambda: messagebox.showwarning(
-                        "Update Aborted",
-                        "Update aborted for security reasons.\n\n"
+                        "For your security, updates without checksums are not allowed.\n\n"
                         "Please download the update manually from:\n"
                         f"{GITHUB_RELEASES_URL}"
                     ))
                     return
                 raise
 
-            # Download the update file
+            # Download the update file to memory first
             request = urllib.request.Request(download_url, headers=headers)
+            with urllib.request.urlopen(request, timeout=60) as response:
+                content = response.read()
 
-            with tempfile.NamedTemporaryFile(mode='wb', suffix='.py', delete=False) as tmp_file:
-                with urllib.request.urlopen(request, timeout=60) as response:
-                    content = response.read()
-                    tmp_file.write(content)
-                tmp_path = tmp_file.name
-
-            # Calculate SHA256 checksum of downloaded file
+            # CRITICAL: Verify checksum BEFORE any file operations
             sha256_hash = hashlib.sha256(content).hexdigest().lower()
 
-            # Verify checksum
             if sha256_hash != expected_checksum:
-                # Delete the potentially compromised file
-                try:
-                    Path(tmp_path).unlink()
-                except:
-                    pass
-
-                self.window.after(0, lambda: messagebox.showerror(
+                self._safe_after(0, lambda: messagebox.showerror(
                     "Security Error",
                     "CHECKSUM VERIFICATION FAILED!\n\n"
                     f"Expected: {expected_checksum}\n"
@@ -759,25 +816,89 @@ class DualAutoClicker:
                 ))
                 return
 
-            # Checksum verified - apply update
+            # Checksum verified - now perform atomic file operations
             current_script = Path(__file__).resolve()
+            script_dir = current_script.parent
             backup_path = current_script.with_suffix('.py.backup')
-            shutil.copy2(current_script, backup_path)
 
-            shutil.move(tmp_path, current_script)
+            # Create temp file in SAME directory as target for atomic replace
+            # (os.replace() is only atomic within the same filesystem)
+            tmp_path = script_dir / f".autoclicker_update_{os_module.getpid()}.tmp"
 
-            self.window.after(0, lambda: messagebox.showinfo(
+            # Write verified content to temp file
+            try:
+                with open(tmp_path, 'wb') as f:
+                    f.write(content)
+                    f.flush()
+                    os_module.fsync(f.fileno())  # Ensure data is written to disk
+            except (IOError, OSError) as write_error:
+                self._safe_after(0, lambda: messagebox.showerror(
+                    "Update Failed",
+                    f"Failed to write update file:\n{write_error}"
+                ))
+                return
+
+            # Verify the written file matches (defense against write errors)
+            try:
+                with open(tmp_path, 'rb') as f:
+                    written_hash = hashlib.sha256(f.read()).hexdigest().lower()
+                if written_hash != expected_checksum:
+                    raise ValueError("Written file checksum doesn't match")
+            except Exception as verify_error:
+                self._safe_after(0, lambda: messagebox.showerror(
+                    "Update Failed",
+                    f"Failed to verify written file:\n{verify_error}"
+                ))
+                return
+
+            # Create backup of current script
+            try:
+                shutil.copy2(current_script, backup_path)
+            except (IOError, OSError) as backup_error:
+                self._safe_after(0, lambda: messagebox.showerror(
+                    "Update Failed",
+                    f"Failed to create backup:\n{backup_error}"
+                ))
+                return
+
+            # ATOMIC REPLACE: os.replace() is atomic on POSIX systems
+            # and on Windows when source and dest are on the same filesystem
+            try:
+                os_module.replace(str(tmp_path), str(current_script))
+                tmp_path = None  # Mark as successfully moved (no cleanup needed)
+            except (IOError, OSError) as replace_error:
+                self._safe_after(0, lambda: messagebox.showerror(
+                    "Update Failed",
+                    f"Failed to apply update (atomic replace failed):\n{replace_error}\n\n"
+                    f"Your backup is safe at:\n{backup_path}"
+                ))
+                return
+
+            self._safe_after(0, lambda: messagebox.showinfo(
                 "Update Complete",
                 "Update downloaded and verified successfully!\n\n"
-                f"Checksum: {sha256_hash[:16]}...\n\n"
+                f"SHA256: {sha256_hash[:16]}...{sha256_hash[-8:]}\n"
+                f"Backup saved to: {backup_path.name}\n\n"
                 "Please restart the application to apply the update."
             ))
 
-        except Exception as e:
-            self.window.after(0, lambda: messagebox.showerror(
+        except urllib.error.URLError as e:
+            self._safe_after(0, lambda: messagebox.showerror(
                 "Update Failed",
-                f"Failed to download update:\n{e}"
+                f"Network error while downloading update:\n{e}"
             ))
+        except Exception as e:
+            self._safe_after(0, lambda: messagebox.showerror(
+                "Update Failed",
+                f"Unexpected error during update:\n{type(e).__name__}: {e}"
+            ))
+        finally:
+            # Clean up temp file if it still exists (failed update)
+            if tmp_path is not None:
+                try:
+                    Path(tmp_path).unlink()
+                except OSError as cleanup_error:
+                    print(f"Warning: Failed to clean up temp file {tmp_path}: {cleanup_error}")
 
     def run(self):
         self.window.mainloop()

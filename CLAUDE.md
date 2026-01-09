@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Dual AutoClicker** is a Python desktop application that provides automated mouse clicking functionality with dual clicker support. It features a tkinter GUI and supports both pynput (cross-platform) and evdev (Linux-specific) backends.
 
-**Version:** 1.3.0
+**Version:** 1.4.0
 
 ## Files Structure
 
@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 autoclicker/
 ├── autoclicker.py          # Main application (pynput backend - cross-platform)
 ├── autoclicker_evdev.py    # Linux/Wayland version using evdev + uinput
-├── test_autoclicker.py     # Unit tests (31 tests)
+├── test_autoclicker.py     # Unit tests (37 tests)
 └── CLAUDE.md               # This file
 ```
 
@@ -118,6 +118,7 @@ self.window.after(0, lambda: self._show_update_dialog(...))
 - `TestKeyDisplayName` (4 tests): Human-readable key names
 - `TestConfigPersistence` (2 tests): Config file handling
 - `TestConstants` (2 tests): Module constants
+- `TestVersionComparison` (6 tests): Semantic version comparison with pre-release support
 
 **Running Tests:**
 ```bash
@@ -127,9 +128,8 @@ python -m pytest test_autoclicker.py --tb=short  # Shorter output
 
 ## Known Issues / Technical Debt
 
-1. **No auto_check_updates toggle**: Currently always checks on startup, users cannot disable
-2. **evdev version requires root**: Needs uinput access, could use udev rules instead
-3. **No per-clicker mouse button selection**: Both clickers use left-click
+1. **evdev version requires root**: Needs uinput access, could use udev rules instead
+2. **No per-clicker mouse button selection**: Both clickers use left-click
 
 ## Common Development Tasks
 
