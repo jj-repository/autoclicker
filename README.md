@@ -37,6 +37,13 @@ A robust, production-ready autoclicker application with dual mouse autoclickers,
 - **Rate limiting** - prevents accidental rapid toggling (200ms cooldown)
 - **Input validation** - enforces min (0.01s) and max (60s) intervals to prevent system overload
 
+### Auto-Updates
+- **Automatic update checking** on startup (configurable via Help menu)
+- **One-click updates** with SHA256 checksum verification for security
+- **Backup creation** before applying updates (`.py.backup`)
+- **Manual update check** available in Help menu
+- **GitHub Releases integration** - opens releases page as alternative
+
 ## Installation
 
 ### Quick Start (Recommended)
@@ -113,6 +120,7 @@ sudo python3 autoclicker_evdev.py
 - **Keyboard presser**: Runs independently, can work alongside mouse clickers
 - **Emergency stop**: Stops everything at once
 - All settings are saved automatically to `~/.config/autoclicker/config.json`
+- **Update settings**: Toggle "Check for Updates on Startup" in Help menu
 
 ## Default Settings
 
@@ -192,6 +200,12 @@ sudo python3 autoclicker_evdev.py
 - Check the terminal/console for detailed error messages
 - Virtual device initialization may have failed
 - Try restarting the application with proper permissions
+
+### Update issues
+- **"Checksum verification failed"**: The downloaded file may be corrupted, try again
+- **"Could not find checksum file"**: Update not available for this version, visit GitHub releases
+- **Cannot check for updates**: Check your internet connection
+- **Backup file created**: If update fails, restore from `.py.backup` file
 
 ## Building Executables
 
