@@ -784,8 +784,14 @@ class DualAutoClicker:
                 checksum_request = urllib.request.Request(checksum_url, headers=headers)
                 with urllib.request.urlopen(checksum_request, timeout=30) as response:
                     checksum_content = response.read().decode().strip()
+                    # Validate checksum file is not empty
+                    if not checksum_content:
+                        raise ValueError("Checksum file is empty")
                     # Format: "sha256hash  filename" or just "sha256hash"
-                    expected_checksum = checksum_content.split()[0].lower()
+                    parts = checksum_content.split()
+                    if not parts:
+                        raise ValueError("Checksum file contains no valid hash")
+                    expected_checksum = parts[0].lower()
                     # Validate checksum format (must be exactly 64 hex characters)
                     if len(expected_checksum) != 64 or not all(c in '0123456789abcdef' for c in expected_checksum):
                         raise ValueError("Invalid checksum format - not a valid SHA256 hash")
