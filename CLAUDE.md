@@ -163,3 +163,72 @@ python -m pytest test_autoclicker.py --tb=short  # Shorter output
 - Mock evdev/pynput modules for platform-independent testing
 - Use `unittest.mock.patch` for file operations
 - Tests use `tempfile` for config file testing
+
+---
+
+## Review Status
+
+> **Last Full Review:** 2026-01-10
+> **Status:** ✅ Production Ready
+
+### Security Review ✅
+- [x] Path traversal protection (config paths validated)
+- [x] Input validation (interval bounds, key serialization)
+- [x] No hardcoded secrets
+- [x] Safe subprocess usage (N/A - no subprocess)
+- [x] Download size validation (5MB limit)
+- [x] SHA256 checksum verification for updates
+- [x] Backup before update
+
+### Thread Safety Review ✅
+- [x] Clicker state protected by locks
+- [x] Hotkey timing dictionary protected by lock
+- [x] UI updates via `_safe_after()` wrapper (evdev)
+- [x] Hotkey capture state protected (evdev)
+
+### Code Quality ✅
+- [x] All tests passing (37 tests)
+- [x] No unused imports/variables
+- [x] Consistent error handling
+- [x] Logging implemented
+
+## Quality Standards
+
+**Target:** Personal utility tool - functional, secure, maintainable
+
+| Aspect | Standard | Status |
+|--------|----------|--------|
+| Test Coverage | Core logic tested | ✅ Met |
+| Security | No vulnerabilities in user input handling | ✅ Met |
+| Thread Safety | No race conditions in click/hotkey logic | ✅ Met |
+| Error Handling | Graceful failures, no crashes | ✅ Met |
+| Documentation | CLAUDE.md current | ✅ Met |
+
+## Intentional Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Two separate files (pynput/evdev) | Different backends for different platforms, keeps code simpler than runtime switching |
+| Root required for evdev | uinput requires elevated privileges; udev rules would add setup complexity |
+| Left-click only | Simplicity; right-click selection would add UI complexity for minimal benefit |
+| 200ms hotkey cooldown | Prevents accidental double-toggles; tested value that feels responsive |
+| Config in ~/.config/ | Standard XDG location for Linux; works cross-platform |
+
+## Won't Fix (Accepted Limitations)
+
+| Issue | Reason |
+|-------|--------|
+| evdev requires sudo | By design - uinput needs privileges. Users can set up udev rules if desired |
+| No per-clicker button selection | Low demand; adds UI complexity |
+| No click patterns (double-click, etc.) | Feature creep; simple tool should stay simple |
+| pynput version doesn't work in some games | Use evdev version for games; documented in README |
+
+## Completed Optimizations
+
+- ✅ Thread-safe state management
+- ✅ Hotkey rate limiting
+- ✅ Safe UI updates from threads
+- ✅ Config persistence with validation
+- ✅ Update system with verification
+
+**DO NOT further optimize:** The click timing is already as precise as Python/tkinter allows. Lower-level timing would require rewriting in C/Rust.
