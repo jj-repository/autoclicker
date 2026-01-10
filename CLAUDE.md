@@ -145,6 +145,7 @@ python -m pytest test_autoclicker.py --tb=short  # Shorter output
 - Added `_safe_after()` method to evdev version for crash-safe UI callbacks from threads
 - Added exception handling for `KeyCode.from_char()` in key deserialization
 - Added thread-safe locking for hotkey rate limiting dictionary
+- Fixed IndexError when update checksum file is empty (added validation before split)
 
 ## Common Development Tasks
 
