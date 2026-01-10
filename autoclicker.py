@@ -74,8 +74,9 @@ class DualAutoClicker:
         self.listening_for_hotkey = False
         self.hotkey_target = None  # "clicker1" or "clicker2"
 
-        # Rate limiting for hotkey presses
+        # Rate limiting for hotkey presses (thread-safe)
         self.last_hotkey_time = {}
+        self.hotkey_timing_lock = threading.Lock()
         self.hotkey_cooldown = 0.2  # 200ms cooldown between hotkey presses
 
         # Update settings
@@ -216,7 +217,10 @@ class DualAutoClicker:
         elif key_type == 'char':
             char = key_data.get('char')
             if char and isinstance(char, str) and len(char) == 1:
-                return KeyCode.from_char(char)
+                try:
+                    return KeyCode.from_char(char)
+                except Exception:
+                    return Key.f6  # fallback if KeyCode creation fails
             return Key.f6  # fallback if char is missing or invalid
         else:
             return Key.f6  # fallback
@@ -444,15 +448,15 @@ class DualAutoClicker:
     def on_hotkey_press(self, key):
         """Handle hotkey presses with rate limiting"""
         try:
-            # Rate limiting to prevent rapid toggling
+            # Rate limiting to prevent rapid toggling (thread-safe)
             current_time = time.time()
             key_str = str(key)
 
-            if key_str in self.last_hotkey_time:
-                if current_time - self.last_hotkey_time[key_str] < self.hotkey_cooldown:
-                    return  # Ignore rapid key presses
-
-            self.last_hotkey_time[key_str] = current_time
+            with self.hotkey_timing_lock:
+                if key_str in self.last_hotkey_time:
+                    if current_time - self.last_hotkey_time[key_str] < self.hotkey_cooldown:
+                        return  # Ignore rapid key presses
+                self.last_hotkey_time[key_str] = current_time
 
             # Check clicker 1 hotkey
             if key == self.clicker1_hotkey:

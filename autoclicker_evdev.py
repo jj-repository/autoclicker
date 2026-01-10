@@ -89,8 +89,9 @@ class DualAutoClicker:
         self.listening_for_hotkey = False
         self.hotkey_target = None  # "clicker1", "clicker2", "keypresser", or "emergency_stop"
 
-        # Rate limiting for hotkey presses
+        # Rate limiting for hotkey presses (thread-safe)
         self.last_hotkey_time = {}
+        self.hotkey_timing_lock = threading.Lock()
         self.hotkey_cooldown = 0.2  # 200ms cooldown between hotkey presses
 
         # UI elements
@@ -113,6 +114,18 @@ class DualAutoClicker:
         self.start_keyboard_listener()
 
         self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def _safe_after(self, delay_ms: int, callback) -> None:
+        """
+        Safely schedule a callback on the main thread.
+        Prevents crashes if window is destroyed before callback runs.
+        """
+        try:
+            if self.window and self.window.winfo_exists():
+                self.window.after(delay_ms, callback)
+        except tk.TclError:
+            # Window was destroyed, ignore the callback
+            pass
 
     def _validate_interval(self, interval: Any, default: float) -> float:
         """Validate interval is within acceptable bounds."""
@@ -237,7 +250,10 @@ class DualAutoClicker:
         elif key_type == 'char':
             char = key_data.get('char')
             if char and isinstance(char, str) and len(char) == 1:
-                return KeyCode.from_char(char)
+                try:
+                    return KeyCode.from_char(char)
+                except Exception:
+                    return Key.f6  # fallback if KeyCode creation fails
             return Key.f6  # fallback if char is missing or invalid
         else:
             return Key.f6  # fallback
@@ -589,25 +605,25 @@ class DualAutoClicker:
         if target == "clicker1":
             self.clicker1_hotkey = key
             self.clicker1_hotkey_display = key_display
-            self.window.after(0, lambda: self.hotkey1_button.config(text=f"Current: {key_display}"))
+            self._safe_after(0, lambda: self.hotkey1_button.config(text=f"Current: {key_display}"))
         elif target == "clicker2":
             self.clicker2_hotkey = key
             self.clicker2_hotkey_display = key_display
-            self.window.after(0, lambda: self.hotkey2_button.config(text=f"Current: {key_display}"))
+            self._safe_after(0, lambda: self.hotkey2_button.config(text=f"Current: {key_display}"))
         elif target == "keypresser":
             self.keypresser_hotkey = key
             self.keypresser_hotkey_display = key_display
-            self.window.after(0, lambda: self.keypresser_hotkey_button.config(text=f"Current: {key_display}"))
+            self._safe_after(0, lambda: self.keypresser_hotkey_button.config(text=f"Current: {key_display}"))
         else:  # emergency_stop
             self.emergency_stop_hotkey = key
             self.emergency_stop_hotkey_display = key_display
-            self.window.after(0, lambda: self.emergency_stop_button.config(text=f"Current: {key_display}"))
+            self._safe_after(0, lambda: self.emergency_stop_button.config(text=f"Current: {key_display}"))
 
         # Save the new configuration
         self.save_config()
 
         # Restart the main keyboard listener
-        self.window.after(0, self.start_keyboard_listener)
+        self._safe_after(0, self.start_keyboard_listener)
 
     def init_virtual_mouse(self):
         """Initialize the virtual mouse device using evdev"""
@@ -683,15 +699,15 @@ class DualAutoClicker:
     def on_hotkey_press(self, key):
         """Handle hotkey presses with rate limiting"""
         try:
-            # Rate limiting to prevent rapid toggling
+            # Rate limiting to prevent rapid toggling (thread-safe)
             current_time = time.time()
             key_str = str(key)
 
-            if key_str in self.last_hotkey_time:
-                if current_time - self.last_hotkey_time[key_str] < self.hotkey_cooldown:
-                    return  # Ignore rapid key presses
-
-            self.last_hotkey_time[key_str] = current_time
+            with self.hotkey_timing_lock:
+                if key_str in self.last_hotkey_time:
+                    if current_time - self.last_hotkey_time[key_str] < self.hotkey_cooldown:
+                        return  # Ignore rapid key presses
+                self.last_hotkey_time[key_str] = current_time
 
             # Check emergency stop hotkey first (highest priority)
             if key == self.emergency_stop_hotkey:
@@ -778,8 +794,8 @@ class DualAutoClicker:
                 print(f"Error in clicker 1: {e}")
                 with self.clicker1_lock:
                     self.clicker1_clicking = False
-                self.window.after(0, lambda: self.status1_var.set("Error"))
-                self.window.after(0, lambda: self.status1_label.config(fg="orange"))
+                self._safe_after(0, lambda: self.status1_var.set("Error"))
+                self._safe_after(0, lambda: self.status1_label.config(fg="orange"))
                 break
 
             time.sleep(interval)
@@ -798,8 +814,8 @@ class DualAutoClicker:
                 print(f"Error in clicker 2: {e}")
                 with self.clicker2_lock:
                     self.clicker2_clicking = False
-                self.window.after(0, lambda: self.status2_var.set("Error"))
-                self.window.after(0, lambda: self.status2_label.config(fg="orange"))
+                self._safe_after(0, lambda: self.status2_var.set("Error"))
+                self._safe_after(0, lambda: self.status2_label.config(fg="orange"))
                 break
 
             time.sleep(interval)
@@ -846,8 +862,8 @@ class DualAutoClicker:
                 print(f"Error in key presser: {e}")
                 with self.keypresser_lock:
                     self.keypresser_pressing = False
-                self.window.after(0, lambda: self.keypresser_status_var.set("Error"))
-                self.window.after(0, lambda: self.keypresser_status_label.config(fg="orange"))
+                self._safe_after(0, lambda: self.keypresser_status_var.set("Error"))
+                self._safe_after(0, lambda: self.keypresser_status_label.config(fg="orange"))
                 break
 
             time.sleep(interval)

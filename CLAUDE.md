@@ -132,11 +132,19 @@ python -m pytest test_autoclicker.py --tb=short  # Shorter output
 - **SHA256 checksum verification**: Required for all updates
 - **Backup before update**: Creates `.py.backup` before applying updates
 - **Hotkey capture lock**: Thread-safe hotkey capture state (evdev version)
+- **Thread-safe UI updates**: Uses `_safe_after()` wrapper to prevent TclError crashes (evdev version)
+- **Thread-safe hotkey timing**: Hotkey rate limiting protected by lock
 
 ## Known Issues / Technical Debt
 
 1. **evdev version requires root**: Needs uinput access, could use udev rules instead
 2. **No per-clicker mouse button selection**: Both clickers use left-click
+
+## Recent Fixes (January 2026)
+
+- Added `_safe_after()` method to evdev version for crash-safe UI callbacks from threads
+- Added exception handling for `KeyCode.from_char()` in key deserialization
+- Added thread-safe locking for hotkey rate limiting dictionary
 
 ## Common Development Tasks
 
