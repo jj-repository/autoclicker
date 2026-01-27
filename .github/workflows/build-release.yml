@@ -31,7 +31,7 @@ jobs:
         pyinstaller --onefile --name autoclicker-basic autoclicker.py
 
     - name: Upload Linux artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: linux-executables
         path: |
@@ -58,7 +58,7 @@ jobs:
         pyinstaller --onefile --windowed --name autoclicker autoclicker.py
 
     - name: Upload Windows artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: windows-executables
         path: |
