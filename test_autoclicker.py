@@ -182,15 +182,15 @@ class TestKeyMapping(unittest.TestCase):
         if tk_key.startswith('F') and tk_key[1:].isdigit():
             f_num = int(tk_key[1:])
             if 1 <= f_num <= 12:
-                return getattr(self.e, f'KEY_F{f_num}', self.e.KEY_SPACE)
+                return getattr(self.e, f'KEY_F{f_num}', None)
 
         if len(tk_key) == 1 and tk_key.isalpha():
-            return getattr(self.e, f'KEY_{tk_key.upper()}', self.e.KEY_SPACE)
+            return getattr(self.e, f'KEY_{tk_key.upper()}', None)
 
         if len(tk_key) == 1 and tk_key.isdigit():
-            return getattr(self.e, f'KEY_{tk_key}', self.e.KEY_SPACE)
+            return getattr(self.e, f'KEY_{tk_key}', None)
 
-        return self.e.KEY_SPACE
+        return None
 
     def test_special_keys(self):
         """Test special key mapping"""
@@ -230,10 +230,10 @@ class TestKeyMapping(unittest.TestCase):
         self.assertEqual(self._tk_key_to_evdev('Control_L'), self.e.KEY_LEFTCTRL)
         self.assertEqual(self._tk_key_to_evdev('Alt_L'), self.e.KEY_LEFTALT)
 
-    def test_unknown_key_defaults_to_space(self):
-        """Test unknown keys default to space"""
-        self.assertEqual(self._tk_key_to_evdev('unknown'), self.e.KEY_SPACE)
-        self.assertEqual(self._tk_key_to_evdev(''), self.e.KEY_SPACE)
+    def test_unknown_key_returns_none(self):
+        """Test unknown keys return None"""
+        self.assertIsNone(self._tk_key_to_evdev('unknown'))
+        self.assertIsNone(self._tk_key_to_evdev(''))
 
 
 class TestKeySerialization(unittest.TestCase):

@@ -18,11 +18,13 @@ from tkinter import ttk, messagebox
 import threading
 import time
 import json
+import sys
+import os
 from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.4.0"
+__version__ = "1.4.1"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"
@@ -46,7 +48,11 @@ class DualAutoClicker:
         self.window.resizable(False, False)
 
         # Config file path
-        self.config_path = Path.home() / ".config" / "autoclicker" / "config.json"
+        if sys.platform == 'win32':
+            appdata = os.environ.get('APPDATA', str(Path.home()))
+            self.config_path = Path(appdata) / "autoclicker" / "config.json"
+        else:
+            self.config_path = Path.home() / ".config" / "autoclicker" / "config.json"
 
         # Thread locks for thread-safe state access
         self.clicker1_lock = threading.Lock()
@@ -167,10 +173,20 @@ class DualAutoClicker:
             print(f"Error loading config: {e}")
 
     def save_config(self):
-        """Save current configuration to JSON file"""
+        """Save current configuration to JSON file, merging with existing
+        settings so that keys written by the evdev version are preserved."""
         try:
             # Create config directory if it doesn't exist
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Load existing config first to preserve keys from the other version
+            existing_config = {}
+            if self.config_path.exists():
+                try:
+                    with open(self.config_path, 'r') as f:
+                        existing_config = json.load(f)
+                except (json.JSONDecodeError, IOError, OSError):
+                    existing_config = {}
 
             config = {
                 'clicker1_interval': self.clicker1_interval,
@@ -182,8 +198,11 @@ class DualAutoClicker:
                 'auto_check_updates': self.auto_check_updates,
             }
 
+            # Merge: existing values first, then overwrite with our values
+            existing_config.update(config)
+
             with open(self.config_path, 'w') as f:
-                json.dump(config, f, indent=2)
+                json.dump(existing_config, f, indent=2)
 
         except Exception as e:
             print(f"Error saving config: {e}")
@@ -398,10 +417,7 @@ class DualAutoClicker:
             if not self.listening_for_hotkey:
                 return
 
-            # Stop the capture listener
-            if self.hotkey_capture_listener:
-                self.hotkey_capture_listener.stop()
-                self.hotkey_capture_listener = None
+            self.hotkey_capture_listener = None
 
             self.listening_for_hotkey = False
             target = self.hotkey_target
@@ -425,6 +441,10 @@ class DualAutoClicker:
 
         # Restart the main keyboard listener on main thread safely
         self._safe_after(0, self.start_keyboard_listener)
+
+        # Return False to tell pynput to stop this listener (avoids deadlock
+        # from calling stop() inside the callback)
+        return False
 
     def perform_click(self):
         """Perform a single left mouse click using pynput"""
@@ -495,8 +515,8 @@ class DualAutoClicker:
         with self.clicker1_lock:
             if not self.clicker1_clicking:
                 self.clicker1_clicking = True
-                self.status1_var.set("Clicking...")
-                self.status1_label.config(fg="red")
+                self._safe_after(0, lambda: self.status1_var.set("Clicking..."))
+                self._safe_after(0, lambda: self.status1_label.config(fg="red"))
                 self.clicker1_thread = threading.Thread(target=self._click_loop1, daemon=True)
                 self.clicker1_thread.start()
 
@@ -504,15 +524,15 @@ class DualAutoClicker:
         with self.clicker1_lock:
             if self.clicker1_clicking:
                 self.clicker1_clicking = False
-                self.status1_var.set("Idle")
-                self.status1_label.config(fg="green")
+                self._safe_after(0, lambda: self.status1_var.set("Idle"))
+                self._safe_after(0, lambda: self.status1_label.config(fg="green"))
 
     def start_clicker2(self):
         with self.clicker2_lock:
             if not self.clicker2_clicking:
                 self.clicker2_clicking = True
-                self.status2_var.set("Clicking...")
-                self.status2_label.config(fg="red")
+                self._safe_after(0, lambda: self.status2_var.set("Clicking..."))
+                self._safe_after(0, lambda: self.status2_label.config(fg="red"))
                 self.clicker2_thread = threading.Thread(target=self._click_loop2, daemon=True)
                 self.clicker2_thread.start()
 
@@ -520,8 +540,8 @@ class DualAutoClicker:
         with self.clicker2_lock:
             if self.clicker2_clicking:
                 self.clicker2_clicking = False
-                self.status2_var.set("Idle")
-                self.status2_label.config(fg="green")
+                self._safe_after(0, lambda: self.status2_var.set("Idle"))
+                self._safe_after(0, lambda: self.status2_label.config(fg="green"))
 
     def _click_loop1(self):
         """Click loop for clicker 1 with error handling"""
@@ -898,15 +918,50 @@ class DualAutoClicker:
                 ))
                 return
 
-            # ATOMIC REPLACE: os.replace() is atomic on POSIX systems
-            # and on Windows when source and dest are on the same filesystem
+            # Replace the current script with the update
             try:
-                os_module.replace(str(tmp_path), str(current_script))
-                tmp_path = None  # Mark as successfully moved (no cleanup needed)
+                if sys.platform == 'win32':
+                    # On Windows, os.replace() can fail when the target file
+                    # is locked.  Windows does allow renaming an in-use file,
+                    # so rename the current script out of the way first, then
+                    # move the new file in.  If the move fails, restore the
+                    # original from the .old rename.
+                    old_path = current_script.with_suffix('.py.old')
+                    try:
+                        # Remove any leftover .old file from a previous update
+                        if old_path.exists():
+                            old_path.unlink()
+                        os_module.rename(str(current_script), str(old_path))
+                    except OSError as rename_error:
+                        self._safe_after(0, lambda: messagebox.showerror(
+                            "Update Failed",
+                            f"Failed to rename current script:\n{rename_error}\n\n"
+                            f"Your backup is safe at:\n{backup_path}"
+                        ))
+                        return
+                    try:
+                        os_module.rename(str(tmp_path), str(current_script))
+                        tmp_path = None  # Mark as successfully moved
+                    except OSError as move_error:
+                        # Restore the original file from .old
+                        try:
+                            os_module.rename(str(old_path), str(current_script))
+                        except OSError:
+                            pass  # backup_path still has a copy
+                        self._safe_after(0, lambda: messagebox.showerror(
+                            "Update Failed",
+                            f"Failed to move update into place:\n{move_error}\n\n"
+                            f"Your backup is safe at:\n{backup_path}"
+                        ))
+                        return
+                else:
+                    # POSIX: os.replace() is atomic
+                    os_module.replace(str(tmp_path), str(current_script))
+                    tmp_path = None  # Mark as successfully moved (no cleanup needed)
             except (IOError, OSError) as replace_error:
                 self._safe_after(0, lambda: messagebox.showerror(
                     "Update Failed",
-                    f"Failed to apply update (atomic replace failed):\n{replace_error}\n\n"
+                    f"Failed to apply update:\n{replace_error}\n\n"
                     f"Your backup is safe at:\n{backup_path}"
                 ))
                 return
