@@ -24,7 +24,7 @@ from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.4.2"
+__version__ = "1.4.3"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"
@@ -44,7 +44,7 @@ class DualAutoClicker:
     def __init__(self):
         self.window = tk.Tk()
         self.window.title("Dual AutoClicker")
-        self.window.geometry("500x420")
+        self.window.geometry("500x460")
         self.window.resizable(False, False)
 
         # Config file path
@@ -289,6 +289,13 @@ class DualAutoClicker:
             font=("Arial", 9, "italic")
         )
         instructions.grid(row=7, column=0, columnspan=3, pady=(60, 0))
+
+        # Check for Updates button
+        ttk.Button(
+            main_frame,
+            text="Check for Updates",
+            command=self._check_for_updates_clicked
+        ).grid(row=8, column=0, columnspan=3, pady=(10, 0))
 
     def _setup_clicker1_ui(self, parent, column, start_row):
         """Setup UI for Clicker 1"""
