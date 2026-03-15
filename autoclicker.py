@@ -23,7 +23,7 @@ from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.8.3"
+__version__ = "1.9.0"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"

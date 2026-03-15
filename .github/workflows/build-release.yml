@@ -22,18 +22,16 @@ jobs:
         python -m pip install --upgrade pip
         pip install pyinstaller pynput evdev
 
-    - name: Build Linux executables
+    - name: Build Linux executable
       run: |
-        pyinstaller --onefile --name autoclicker-evdev autoclicker_evdev.py
-        pyinstaller --onefile --name autoclicker-basic --add-data "takodachi.png:." autoclicker.py
+        pyinstaller --onefile --name autoclicker-linux autoclicker_evdev.py
 
     - name: Upload Linux artifacts
       uses: actions/upload-artifact@v4
       with:
         name: linux-executables
         path: |
-          dist/autoclicker-evdev
-          dist/autoclicker-basic
+          dist/autoclicker-linux
 
   build-windows:
     runs-on: windows-latest
@@ -50,16 +48,16 @@ jobs:
         python -m pip install --upgrade pip
         pip install pyinstaller pynput
 
-    - name: Build Windows executables
+    - name: Build Windows executable
       run: |
-        pyinstaller --onefile --windowed --name autoclicker --add-data "takodachi.png;." autoclicker.py
+        pyinstaller --onefile --windowed --name autoclicker-portable-win --add-data "takodachi.png;." autoclicker.py
 
     - name: Upload Windows artifacts
       uses: actions/upload-artifact@v4
       with:
         name: windows-executables
         path: |
-          dist/autoclicker.exe
+          dist/autoclicker-portable-win.exe
 
   release:
     needs: [build-linux, build-windows]
@@ -87,34 +85,31 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          dist/linux/autoclicker-evdev
-          dist/linux/autoclicker-basic
-          dist/windows/autoclicker.exe
+          dist/linux/autoclicker-linux
+          dist/windows/autoclicker-portable-win.exe
         body: |
           ## Downloads
 
-          ### Windows
-          - **autoclicker.exe** - AutoClicker with mouse clicking support
-
-          ### Linux
-          - **autoclicker-evdev** - Full version with keyboard presser (Recommended - requires sudo)
-          - **autoclicker-basic** - Mouse clicking only
+          | File | Platform |
+          |------|----------|
+          | **autoclicker-portable-win.exe** | Windows (portable) |
+          | **autoclicker-linux** | Linux (requires sudo) |
 
           ## Installation
 
           ### Windows
-          1. Download the .exe file
+          1. Download `autoclicker-portable-win.exe`
           2. Run it (may need Administrator privileges)
 
           ### Linux
-          1. Download the binary
-          2. Make it executable: `chmod +x autoclicker-evdev`
-          3. Run with sudo: `sudo ./autoclicker-evdev`
+          1. Download `autoclicker-linux`
+          2. Make it executable: `chmod +x autoclicker-linux`
+          3. Run with sudo: `sudo ./autoclicker-linux`
 
           ## What's New
           See commit history for detailed changes.
 
           ---
-          🤖 Built automatically with GitHub Actions
+          Built automatically with GitHub Actions
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
