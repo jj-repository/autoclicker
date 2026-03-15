@@ -23,7 +23,7 @@ from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.8.1"
+__version__ = "1.8.2"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"
@@ -196,17 +196,6 @@ class DualAutoClicker:
         """Toggle between dark and light mode."""
         self.dark_mode = not self.dark_mode
         self._apply_theme()
-
-    def _toggle_keypresser_section(self):
-        """Toggle visibility of the keyboard presser section."""
-        if self.kp_expanded:
-            self.kp_frame.grid_remove()
-            self.kp_toggle_btn.config(text="Keyboard Key Presser  [+]")
-            self.kp_expanded = False
-        else:
-            self.kp_frame.grid()
-            self.kp_toggle_btn.config(text="Keyboard Key Presser  [-]")
-            self.kp_expanded = True
 
     def _safe_after(self, delay_ms, callback):
         """
@@ -426,72 +415,61 @@ class DualAutoClicker:
         )
         self.emergency_stop_button.pack(side=tk.LEFT)
 
-        # ----- COLLAPSIBLE KEYBOARD KEY PRESSER -----
+        # ----- KEYBOARD KEY PRESSER -----
         hseparator = ttk.Separator(main_frame, orient='horizontal')
         hseparator.grid(row=11, column=0, columnspan=3, sticky='ew', pady=(15, 5))
 
-        self.kp_expanded = True
-        self.kp_toggle_btn = ttk.Button(
-            main_frame, text="Keyboard Key Presser  [-]",
-            command=self._toggle_keypresser_section
-        )
-        self.kp_toggle_btn.grid(row=12, column=0, columnspan=3, pady=(0, 5))
-
-        # Collapsible content frame
-        self.kp_frame = ttk.Frame(main_frame)
-        self.kp_frame.grid(row=13, column=0, columnspan=3, sticky='ew')
-
-        # Build keypresser content inside the collapsible frame
-        inner = self.kp_frame
+        keypresser_title = ttk.Label(main_frame, text="Keyboard Key Presser", font=("Arial", 14, "bold"))
+        keypresser_title.grid(row=12, column=0, columnspan=3, pady=(5, 10))
 
         # Left side: target key + interval
-        target_key_label = ttk.Label(inner, text="Key to Press:")
-        target_key_label.grid(row=0, column=0, sticky=tk.W, pady=5)
+        target_key_label = ttk.Label(main_frame, text="Key to Press:")
+        target_key_label.grid(row=13, column=0, sticky=tk.W, pady=5)
 
         self.keypresser_target_key_button = ttk.Button(
-            inner,
+            main_frame,
             text=f"Current: {self.keypresser_target_key_display}",
             command=self.select_target_key,
             width=20
         )
-        self.keypresser_target_key_button.grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.keypresser_target_key_button.grid(row=14, column=0, sticky=tk.W, pady=5)
 
-        kp_interval_label = ttk.Label(inner, text="Interval (seconds):")
-        kp_interval_label.grid(row=2, column=0, sticky=tk.W, pady=(15, 5))
+        kp_interval_label = ttk.Label(main_frame, text="Interval (seconds):")
+        kp_interval_label.grid(row=15, column=0, sticky=tk.W, pady=(15, 5))
 
         self.keypresser_interval_var = tk.StringVar(value=str(self.keypresser_interval))
-        kp_interval_entry = ttk.Entry(inner, textvariable=self.keypresser_interval_var, width=20)
-        kp_interval_entry.grid(row=3, column=0, sticky=tk.W, pady=5)
+        kp_interval_entry = ttk.Entry(main_frame, textvariable=self.keypresser_interval_var, width=20)
+        kp_interval_entry.grid(row=16, column=0, sticky=tk.W, pady=5)
 
         ttk.Button(
-            inner, text="Apply Interval",
+            main_frame, text="Apply Interval",
             command=self.apply_keypresser_interval
-        ).grid(row=4, column=0, pady=5)
+        ).grid(row=17, column=0, pady=5)
 
         # Separator
-        separator2 = ttk.Separator(inner, orient='vertical')
-        separator2.grid(row=0, column=1, rowspan=5, sticky='ns', padx=20)
+        separator2 = ttk.Separator(main_frame, orient='vertical')
+        separator2.grid(row=13, column=1, rowspan=5, sticky='ns', padx=20)
 
         # Right side: hotkey + status
-        kp_hotkey_label = ttk.Label(inner, text="Toggle Hotkey:")
-        kp_hotkey_label.grid(row=0, column=2, sticky=tk.W, pady=5)
+        kp_hotkey_label = ttk.Label(main_frame, text="Toggle Hotkey:")
+        kp_hotkey_label.grid(row=13, column=2, sticky=tk.W, pady=5)
 
         self.keypresser_hotkey_button = ttk.Button(
-            inner,
+            main_frame,
             text=f"Current: {self.keypresser_hotkey_display}",
             command=lambda: self.start_hotkey_capture("keypresser"),
             width=20
         )
-        self.keypresser_hotkey_button.grid(row=1, column=2, sticky=tk.W, pady=5)
+        self.keypresser_hotkey_button.grid(row=14, column=2, sticky=tk.W, pady=5)
 
-        kp_status_label = ttk.Label(inner, text="Status:")
-        kp_status_label.grid(row=2, column=2, sticky=tk.W, pady=(15, 5))
+        kp_status_label = ttk.Label(main_frame, text="Status:")
+        kp_status_label.grid(row=15, column=2, sticky=tk.W, pady=(15, 5))
 
         self.keypresser_status_var = tk.StringVar(value="Idle")
-        self.keypresser_status_label = tk.Label(inner, textvariable=self.keypresser_status_var, font=("Arial", 10, "bold"), fg=self._t['green'], bg=self._t['bg'])
-        self.keypresser_status_label.grid(row=3, column=2, pady=5)
+        self.keypresser_status_label = tk.Label(main_frame, textvariable=self.keypresser_status_var, font=("Arial", 10, "bold"), fg=self._t['green'], bg=self._t['bg'])
+        self.keypresser_status_label.grid(row=16, column=2, pady=5)
 
-        # Instructions at bottom (outside collapsible frame)
+        # Instructions at bottom
         instructions = ttk.Label(
             main_frame,
             text="Mouse clickers stop each other when started. Keyboard presser is independent.\nEmergency Stop will stop everything at once.",
@@ -499,7 +477,7 @@ class DualAutoClicker:
             justify=tk.CENTER,
             font=("Arial", 9, "italic")
         )
-        instructions.grid(row=14, column=0, columnspan=3, pady=(15, 0))
+        instructions.grid(row=18, column=0, columnspan=3, pady=(15, 0))
 
         # (Check for Updates is available via Help menu)
 
