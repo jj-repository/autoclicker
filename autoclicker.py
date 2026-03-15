@@ -23,7 +23,7 @@ from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.8.0"
+__version__ = "1.8.1"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"
@@ -65,8 +65,8 @@ class DualAutoClicker:
     def __init__(self):
         self.window = tk.Tk()
         self.window.title("Dual AutoClicker + Key Presser")
-        self.window.geometry("580x1030")
-        self.window.minsize(480, 800)
+        self.window.geometry("540x820")
+        self.window.minsize(480, 500)
 
         # Theme state
         self.dark_mode = True
@@ -407,21 +407,39 @@ class DualAutoClicker:
         # ----- CLICKER 2 -----
         self._setup_clicker2_ui(main_frame, 2, 1)
 
-        # ----- COLLAPSIBLE KEYBOARD KEY PRESSER + EMERGENCY STOP -----
-        hseparator = ttk.Separator(main_frame, orient='horizontal')
-        hseparator.grid(row=9, column=0, columnspan=3, sticky='ew', pady=(30, 10))
+        # ----- EMERGENCY STOP (always visible) -----
+        hsep_emerg = ttk.Separator(main_frame, orient='horizontal')
+        hsep_emerg.grid(row=8, column=0, columnspan=3, sticky='ew', pady=(20, 10))
 
-        # Toggle button
+        emergency_title = ttk.Label(main_frame, text="Emergency Stop All", font=("Arial", 11, "bold"), foreground="red")
+        emergency_title.grid(row=9, column=0, columnspan=3)
+
+        emerg_row = ttk.Frame(main_frame)
+        emerg_row.grid(row=10, column=0, columnspan=3, pady=(5, 0))
+
+        ttk.Label(emerg_row, text="Hotkey:").pack(side=tk.LEFT, padx=(0, 5))
+        self.emergency_stop_button = ttk.Button(
+            emerg_row,
+            text=f"Current: {self.emergency_stop_hotkey_display}",
+            command=lambda: self.start_hotkey_capture("emergency_stop"),
+            width=15
+        )
+        self.emergency_stop_button.pack(side=tk.LEFT)
+
+        # ----- COLLAPSIBLE KEYBOARD KEY PRESSER -----
+        hseparator = ttk.Separator(main_frame, orient='horizontal')
+        hseparator.grid(row=11, column=0, columnspan=3, sticky='ew', pady=(15, 5))
+
         self.kp_expanded = True
         self.kp_toggle_btn = ttk.Button(
             main_frame, text="Keyboard Key Presser  [-]",
             command=self._toggle_keypresser_section
         )
-        self.kp_toggle_btn.grid(row=10, column=0, columnspan=3, pady=(0, 5))
+        self.kp_toggle_btn.grid(row=12, column=0, columnspan=3, pady=(0, 5))
 
         # Collapsible content frame
         self.kp_frame = ttk.Frame(main_frame)
-        self.kp_frame.grid(row=11, column=0, columnspan=3, sticky='ew')
+        self.kp_frame.grid(row=13, column=0, columnspan=3, sticky='ew')
 
         # Build keypresser content inside the collapsible frame
         inner = self.kp_frame
@@ -473,24 +491,6 @@ class DualAutoClicker:
         self.keypresser_status_label = tk.Label(inner, textvariable=self.keypresser_status_var, font=("Arial", 10, "bold"), fg=self._t['green'], bg=self._t['bg'])
         self.keypresser_status_label.grid(row=3, column=2, pady=5)
 
-        # Emergency Stop (inside collapsible section)
-        hseparator2 = ttk.Separator(inner, orient='horizontal')
-        hseparator2.grid(row=6, column=0, columnspan=3, sticky='ew', pady=(20, 15))
-
-        emergency_title = ttk.Label(inner, text="Emergency Stop All", font=("Arial", 12, "bold"), foreground="red")
-        emergency_title.grid(row=7, column=0, columnspan=3)
-
-        emergency_label = ttk.Label(inner, text="Hotkey to stop ALL autoclickers:")
-        emergency_label.grid(row=8, column=0, columnspan=3, pady=(10, 5))
-
-        self.emergency_stop_button = ttk.Button(
-            inner,
-            text=f"Current: {self.emergency_stop_hotkey_display}",
-            command=lambda: self.start_hotkey_capture("emergency_stop"),
-            width=20
-        )
-        self.emergency_stop_button.grid(row=9, column=0, columnspan=3, pady=5)
-
         # Instructions at bottom (outside collapsible frame)
         instructions = ttk.Label(
             main_frame,
@@ -499,7 +499,7 @@ class DualAutoClicker:
             justify=tk.CENTER,
             font=("Arial", 9, "italic")
         )
-        instructions.grid(row=12, column=0, columnspan=3, pady=(20, 0))
+        instructions.grid(row=14, column=0, columnspan=3, pady=(15, 0))
 
         # (Check for Updates is available via Help menu)
 
