@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-Dual AutoClicker - Cross-Platform Version (pynput)
+Dual AutoClicker + Key Presser - Cross-Platform Version (pynput)
 
-This version uses pynput for mouse control and keyboard hotkey detection.
-Works on Windows, macOS, and Linux (X11).
+This version uses pynput for mouse control, keyboard key pressing,
+and hotkey detection. Works on Windows, macOS, and Linux (X11).
 
 Use this version when:
 - Running on Windows or macOS
 - Running on Linux with X11 (not Wayland)
-- You only need mouse auto-clicking
 
-For Linux with Wayland or games that don't detect pynput clicks,
+For Linux with Wayland or games that don't detect pynput input,
 use autoclicker_evdev.py instead (requires root/uinput permissions).
 """
 import tkinter as tk
@@ -24,7 +23,7 @@ from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.4.3"
+__version__ = "1.5.0"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"
@@ -37,15 +36,16 @@ MIN_INTERVAL = 0.01  # Minimum interval: 10ms (100 clicks/sec max)
 MAX_INTERVAL = 60.0  # Maximum interval: 60 seconds
 DEFAULT_CLICKER1_INTERVAL = 0.1
 DEFAULT_CLICKER2_INTERVAL = 0.5
+DEFAULT_KEYPRESSER_INTERVAL = 0.1
 MAX_DOWNLOAD_SIZE = 5 * 1024 * 1024  # 5MB max download size for updates
 
 
 class DualAutoClicker:
     def __init__(self):
         self.window = tk.Tk()
-        self.window.title("Dual AutoClicker")
-        self.window.geometry("500x460")
-        self.window.resizable(False, False)
+        self.window.title("Dual AutoClicker + Key Presser")
+        self.window.geometry("750x850")
+        self.window.resizable(True, True)
 
         # Config file path
         if sys.platform == 'win32':
@@ -57,6 +57,7 @@ class DualAutoClicker:
         # Thread locks for thread-safe state access
         self.clicker1_lock = threading.Lock()
         self.clicker2_lock = threading.Lock()
+        self.keypresser_lock = threading.Lock()
         self.hotkey_capture_lock = threading.Lock()
 
         # Clicker 1 state (defaults)
@@ -73,12 +74,26 @@ class DualAutoClicker:
         self.clicker2_clicking = False
         self.clicker2_thread = None
 
+        # Keyboard Key Presser state (defaults)
+        self.keypresser_hotkey = Key.f8
+        self.keypresser_hotkey_display = "F8"
+        self.keypresser_interval = DEFAULT_KEYPRESSER_INTERVAL
+        self.keypresser_target_key = Key.space  # Default to spacebar
+        self.keypresser_target_key_display = "Space"
+        self.keypresser_pressing = False
+        self.keypresser_thread = None
+
+        # Emergency Stop hotkey (defaults)
+        self.emergency_stop_hotkey = Key.f9
+        self.emergency_stop_hotkey_display = "F9"
+
         # Shared state
         self.mouse_controller = mouse.Controller()  # pynput mouse controller
+        self.keyboard_controller = keyboard.Controller()  # pynput keyboard controller
         self.keyboard_listener = None
         self.hotkey_capture_listener = None
         self.listening_for_hotkey = False
-        self.hotkey_target = None  # "clicker1" or "clicker2"
+        self.hotkey_target = None  # "clicker1", "clicker2", "keypresser", or "emergency_stop"
 
         # Rate limiting for hotkey presses (thread-safe)
         self.last_hotkey_time = {}
@@ -95,6 +110,11 @@ class DualAutoClicker:
         self.hotkey2_button = None
         self.status1_var = None
         self.status2_var = None
+        self.keypresser_interval_var = None
+        self.keypresser_hotkey_button = None
+        self.keypresser_target_key_button = None
+        self.keypresser_status_var = None
+        self.emergency_stop_button = None
 
         # Load saved configuration
         self.load_config()
@@ -161,6 +181,25 @@ class DualAutoClicker:
                 display = config.get('clicker2_hotkey_display', 'F7')
                 self.clicker2_hotkey_display = display if isinstance(display, str) else 'F7'
 
+            # Load keypresser settings
+            self.keypresser_interval = self._validate_interval(
+                config.get('keypresser_interval', self.keypresser_interval),
+                DEFAULT_KEYPRESSER_INTERVAL
+            )
+
+            if 'keypresser_hotkey' in config:
+                self.keypresser_hotkey = self._deserialize_key(config['keypresser_hotkey'])
+                self.keypresser_hotkey_display = config.get('keypresser_hotkey_display', 'F8')
+
+            if 'keypresser_target_key_pynput' in config:
+                self.keypresser_target_key = self._deserialize_key(config['keypresser_target_key_pynput'])
+                self.keypresser_target_key_display = config.get('keypresser_target_key_display', 'Space')
+
+            # Load emergency stop hotkey
+            if 'emergency_stop_hotkey' in config:
+                self.emergency_stop_hotkey = self._deserialize_key(config['emergency_stop_hotkey'])
+                self.emergency_stop_hotkey_display = config.get('emergency_stop_hotkey_display', 'F9')
+
             # Load auto update setting
             if 'auto_check_updates' in config:
                 self.auto_check_updates = bool(config.get('auto_check_updates', True))
@@ -195,6 +234,13 @@ class DualAutoClicker:
                 'clicker1_hotkey_display': self.clicker1_hotkey_display,
                 'clicker2_hotkey': self._serialize_key(self.clicker2_hotkey),
                 'clicker2_hotkey_display': self.clicker2_hotkey_display,
+                'keypresser_interval': self.keypresser_interval,
+                'keypresser_hotkey': self._serialize_key(self.keypresser_hotkey),
+                'keypresser_hotkey_display': self.keypresser_hotkey_display,
+                'keypresser_target_key_pynput': self._serialize_key(self.keypresser_target_key),
+                'keypresser_target_key_display': self.keypresser_target_key_display,
+                'emergency_stop_hotkey': self._serialize_key(self.emergency_stop_hotkey),
+                'emergency_stop_hotkey_display': self.emergency_stop_hotkey_display,
                 'auto_check_updates': self.auto_check_updates,
             }
 
@@ -280,22 +326,95 @@ class DualAutoClicker:
         # ----- CLICKER 2 -----
         self._setup_clicker2_ui(main_frame, 2, 1)
 
+        # Horizontal separator before keyboard presser
+        hseparator = ttk.Separator(main_frame, orient='horizontal')
+        hseparator.grid(row=9, column=0, columnspan=3, sticky='ew', pady=(30, 30))
+
+        # ----- KEYBOARD KEY PRESSER -----
+        keypresser_title = ttk.Label(main_frame, text="Keyboard Key Presser", font=("Arial", 14, "bold"))
+        keypresser_title.grid(row=10, column=0, columnspan=3, pady=(0, 15))
+
+        # Left side: target key + interval
+        target_key_label = ttk.Label(main_frame, text="Key to Press:")
+        target_key_label.grid(row=11, column=0, sticky=tk.W, pady=5)
+
+        self.keypresser_target_key_button = ttk.Button(
+            main_frame,
+            text=f"Current: {self.keypresser_target_key_display}",
+            command=self.select_target_key,
+            width=20
+        )
+        self.keypresser_target_key_button.grid(row=12, column=0, sticky=tk.W, pady=5)
+
+        kp_interval_label = ttk.Label(main_frame, text="Interval (seconds):")
+        kp_interval_label.grid(row=13, column=0, sticky=tk.W, pady=(15, 5))
+
+        self.keypresser_interval_var = tk.StringVar(value=str(self.keypresser_interval))
+        kp_interval_entry = ttk.Entry(main_frame, textvariable=self.keypresser_interval_var, width=20)
+        kp_interval_entry.grid(row=14, column=0, sticky=tk.W, pady=5)
+
+        ttk.Button(
+            main_frame, text="Apply Interval",
+            command=self.apply_keypresser_interval
+        ).grid(row=15, column=0, pady=5)
+
+        # Separator
+        separator2 = ttk.Separator(main_frame, orient='vertical')
+        separator2.grid(row=11, column=1, rowspan=5, sticky='ns', padx=20)
+
+        # Right side: hotkey + status
+        kp_hotkey_label = ttk.Label(main_frame, text="Toggle Hotkey:")
+        kp_hotkey_label.grid(row=11, column=2, sticky=tk.W, pady=5)
+
+        self.keypresser_hotkey_button = ttk.Button(
+            main_frame,
+            text=f"Current: {self.keypresser_hotkey_display}",
+            command=lambda: self.start_hotkey_capture("keypresser"),
+            width=20
+        )
+        self.keypresser_hotkey_button.grid(row=12, column=2, sticky=tk.W, pady=5)
+
+        kp_status_label = ttk.Label(main_frame, text="Status:")
+        kp_status_label.grid(row=13, column=2, sticky=tk.W, pady=(15, 5))
+
+        self.keypresser_status_var = tk.StringVar(value="Idle")
+        self.keypresser_status_label = tk.Label(main_frame, textvariable=self.keypresser_status_var, font=("Arial", 10, "bold"), fg="green")
+        self.keypresser_status_label.grid(row=14, column=2, pady=5)
+
+        # Emergency Stop Section
+        hseparator2 = ttk.Separator(main_frame, orient='horizontal')
+        hseparator2.grid(row=17, column=0, columnspan=3, sticky='ew', pady=(30, 20))
+
+        emergency_title = ttk.Label(main_frame, text="Emergency Stop All", font=("Arial", 12, "bold"), foreground="red")
+        emergency_title.grid(row=18, column=0, columnspan=3)
+
+        emergency_label = ttk.Label(main_frame, text="Hotkey to stop ALL autoclickers:")
+        emergency_label.grid(row=19, column=0, columnspan=3, pady=(10, 5))
+
+        self.emergency_stop_button = ttk.Button(
+            main_frame,
+            text=f"Current: {self.emergency_stop_hotkey_display}",
+            command=lambda: self.start_hotkey_capture("emergency_stop"),
+            width=20
+        )
+        self.emergency_stop_button.grid(row=20, column=0, columnspan=3, pady=5)
+
         # Instructions at bottom
         instructions = ttk.Label(
             main_frame,
-            text="Starting one autoclicker will automatically stop the other",
+            text="Mouse clickers stop each other when started. Keyboard presser is independent.\nEmergency Stop will stop everything at once.",
             wraplength=650,
             justify=tk.CENTER,
             font=("Arial", 9, "italic")
         )
-        instructions.grid(row=7, column=0, columnspan=3, pady=(60, 0))
+        instructions.grid(row=21, column=0, columnspan=3, pady=(30, 0))
 
         # Check for Updates button
         ttk.Button(
             main_frame,
             text="Check for Updates",
             command=self._check_for_updates_clicked
-        ).grid(row=8, column=0, columnspan=3, pady=(10, 0))
+        ).grid(row=22, column=0, columnspan=3, pady=(10, 0))
 
     def _setup_clicker1_ui(self, parent, column, start_row):
         """Setup UI for Clicker 1"""
@@ -384,7 +503,17 @@ class DualAutoClicker:
             if interval_value > MAX_INTERVAL:
                 raise ValueError(f"Interval must be at most {MAX_INTERVAL}s")
             # Acquire the appropriate lock before modifying interval
-            lock = self.clicker1_lock if target_attr == 'clicker1_interval' else self.clicker2_lock
+            lock_map = {
+                'clicker1_interval': self.clicker1_lock,
+                'clicker2_interval': self.clicker2_lock,
+                'keypresser_interval': self.keypresser_lock,
+            }
+            lock = lock_map.get(target_attr)
+            if not lock:
+                setattr(self, target_attr, interval_value)
+                self.save_config()
+                messagebox.showinfo("Success", f"{name} interval updated to {interval_value}s")
+                return
             with lock:
                 setattr(self, target_attr, interval_value)
             self.save_config()
@@ -398,6 +527,73 @@ class DualAutoClicker:
     def apply_interval2(self):
         self._apply_interval(self.interval2_var, 'clicker2_interval', 'Clicker 2')
 
+    def apply_keypresser_interval(self):
+        self._apply_interval(self.keypresser_interval_var, 'keypresser_interval', 'Key Presser')
+
+    def select_target_key(self):
+        """Let user select which keyboard key to auto-press"""
+        dialog = tk.Toplevel(self.window)
+        dialog.title("Select Key to Press")
+        dialog.geometry("300x150")
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        label = ttk.Label(dialog, text="Press any key...", font=("Arial", 12))
+        label.pack(pady=40)
+
+        def on_key_press(event):
+            key_name = event.keysym
+            # Convert tkinter keysym to pynput Key/KeyCode
+            pynput_key = self._tk_keysym_to_pynput(key_name)
+            if pynput_key is not None:
+                self.keypresser_target_key = pynput_key
+                self.keypresser_target_key_display = key_name.upper() if len(key_name) == 1 else key_name.capitalize()
+                self.keypresser_target_key_button.config(text=f"Current: {self.keypresser_target_key_display}")
+                self.save_config()
+            else:
+                messagebox.showwarning(
+                    "Unsupported Key",
+                    f"The key '{key_name}' is not supported.\n\n"
+                    "Please choose a standard letter, number, function key, "
+                    "or one of the recognized special keys."
+                )
+            dialog.destroy()
+
+        dialog.bind("<Key>", on_key_press)
+        dialog.focus_set()
+
+    def _tk_keysym_to_pynput(self, keysym):
+        """Convert tkinter keysym to pynput Key or KeyCode."""
+        special_map = {
+            'space': Key.space, 'Return': Key.enter, 'Tab': Key.tab,
+            'Escape': Key.esc, 'BackSpace': Key.backspace, 'Delete': Key.delete,
+            'Up': Key.up, 'Down': Key.down, 'Left': Key.left, 'Right': Key.right,
+            'Home': Key.home, 'End': Key.end,
+            'Page_Up': Key.page_up, 'Page_Down': Key.page_down,
+            'Insert': Key.insert,
+            'Shift_L': Key.shift_l, 'Shift_R': Key.shift_r,
+            'Control_L': Key.ctrl_l, 'Control_R': Key.ctrl_r,
+            'Alt_L': Key.alt_l, 'Alt_R': Key.alt_r,
+        }
+
+        if keysym in special_map:
+            return special_map[keysym]
+
+        # F keys
+        if keysym.startswith('F') and keysym[1:].isdigit():
+            f_num = int(keysym[1:])
+            if 1 <= f_num <= 12:
+                return getattr(Key, f'f{f_num}', None)
+
+        # Single character (letter or digit)
+        if len(keysym) == 1:
+            try:
+                return KeyCode.from_char(keysym.lower())
+            except Exception:
+                return None
+
+        return None
+
     def start_hotkey_capture(self, target):
         with self.hotkey_capture_lock:
             if self.listening_for_hotkey:
@@ -408,8 +604,12 @@ class DualAutoClicker:
 
         if target == "clicker1":
             self.hotkey1_button.config(text="Press a key...")
-        else:
+        elif target == "clicker2":
             self.hotkey2_button.config(text="Press a key...")
+        elif target == "keypresser":
+            self.keypresser_hotkey_button.config(text="Press a key...")
+        else:  # emergency_stop
+            self.emergency_stop_button.config(text="Press a key...")
 
         # Stop the main keyboard listener temporarily
         self.stop_keyboard_listener()
@@ -435,13 +635,19 @@ class DualAutoClicker:
         if target == "clicker1":
             self.clicker1_hotkey = key
             self.clicker1_hotkey_display = key_display
-            # Schedule UI update on main thread safely
             self._safe_after(0, lambda: self.hotkey1_button.config(text=f"Current: {key_display}"))
-        else:
+        elif target == "clicker2":
             self.clicker2_hotkey = key
             self.clicker2_hotkey_display = key_display
-            # Schedule UI update on main thread safely
             self._safe_after(0, lambda: self.hotkey2_button.config(text=f"Current: {key_display}"))
+        elif target == "keypresser":
+            self.keypresser_hotkey = key
+            self.keypresser_hotkey_display = key_display
+            self._safe_after(0, lambda: self.keypresser_hotkey_button.config(text=f"Current: {key_display}"))
+        else:  # emergency_stop
+            self.emergency_stop_hotkey = key
+            self.emergency_stop_hotkey_display = key_display
+            self._safe_after(0, lambda: self.emergency_stop_button.config(text=f"Current: {key_display}"))
 
         # Save the new configuration (thread-safe file write)
         self.save_config()
@@ -456,6 +662,11 @@ class DualAutoClicker:
     def perform_click(self):
         """Perform a single left mouse click using pynput"""
         self.mouse_controller.click(mouse.Button.left, 1)
+
+    def perform_keypress(self):
+        """Perform a single key press using pynput"""
+        self.keyboard_controller.press(self.keypresser_target_key)
+        self.keyboard_controller.release(self.keypresser_target_key)
 
     def get_key_display_name(self, key):
         # Handle special keys
@@ -485,12 +696,18 @@ class DualAutoClicker:
                         return  # Ignore rapid key presses
                 self.last_hotkey_time[key_str] = current_time
 
+            # Check emergency stop hotkey first (highest priority)
+            if key == self.emergency_stop_hotkey:
+                self.emergency_stop_all()
             # Check clicker 1 hotkey
-            if key == self.clicker1_hotkey:
+            elif key == self.clicker1_hotkey:
                 self.toggle_clicker1()
             # Check clicker 2 hotkey
             elif key == self.clicker2_hotkey:
                 self.toggle_clicker2()
+            # Check keypresser hotkey
+            elif key == self.keypresser_hotkey:
+                self.toggle_keypresser()
         except AttributeError as e:
             # Key comparison failed - likely a key object without expected attributes
             # This can happen with some special key combinations
@@ -590,6 +807,56 @@ class DualAutoClicker:
 
             time.sleep(interval)
 
+    def toggle_keypresser(self):
+        with self.keypresser_lock:
+            is_pressing = self.keypresser_pressing
+        if is_pressing:
+            self.stop_keypresser()
+        else:
+            self.start_keypresser()
+
+    def start_keypresser(self):
+        with self.keypresser_lock:
+            if not self.keypresser_pressing:
+                self.keypresser_pressing = True
+                self._safe_after(0, lambda: self.keypresser_status_var.set("Pressing..."))
+                self._safe_after(0, lambda: self.keypresser_status_label.config(fg="red"))
+                self.keypresser_thread = threading.Thread(target=self._keypresser_loop, daemon=True)
+                self.keypresser_thread.start()
+
+    def stop_keypresser(self):
+        with self.keypresser_lock:
+            if self.keypresser_pressing:
+                self.keypresser_pressing = False
+                self._safe_after(0, lambda: self.keypresser_status_var.set("Idle"))
+                self._safe_after(0, lambda: self.keypresser_status_label.config(fg="green"))
+
+    def _keypresser_loop(self):
+        """Key press loop with error handling"""
+        while True:
+            with self.keypresser_lock:
+                if not self.keypresser_pressing:
+                    break
+                interval = self.keypresser_interval
+
+            try:
+                self.perform_keypress()
+            except Exception as e:
+                print(f"Error in key presser: {e}")
+                with self.keypresser_lock:
+                    self.keypresser_pressing = False
+                self._safe_after(0, lambda: self.keypresser_status_var.set("Error"))
+                self._safe_after(0, lambda: self.keypresser_status_label.config(fg="orange"))
+                break
+
+            time.sleep(interval)
+
+    def emergency_stop_all(self):
+        """Stop all autoclickers and key presser immediately"""
+        self.stop_clicker1()
+        self.stop_clicker2()
+        self.stop_keypresser()
+
     def start_keyboard_listener(self):
         # Stop existing listener first if present to prevent resource leak
         if self.keyboard_listener:
@@ -610,23 +877,21 @@ class DualAutoClicker:
     def on_closing(self):
         self.stop_clicker1()
         self.stop_clicker2()
+        self.stop_keypresser()
         self.stop_keyboard_listener()
         if self.hotkey_capture_listener:
             try:
                 self.hotkey_capture_listener.stop()
             except Exception:
                 pass
-        # Wait for clicker threads to finish to ensure clean shutdown
-        if self.clicker1_thread:
-            if self.clicker1_thread.is_alive():
-                self.clicker1_thread.join(timeout=1.0)
-            if self.clicker1_thread.is_alive():
-                print("Warning: Clicker 1 thread did not exit cleanly")
-        if self.clicker2_thread:
-            if self.clicker2_thread.is_alive():
-                self.clicker2_thread.join(timeout=1.0)
-            if self.clicker2_thread.is_alive():
-                print("Warning: Clicker 2 thread did not exit cleanly")
+        # Wait for threads to finish to ensure clean shutdown
+        for name, thread in [("Clicker 1", self.clicker1_thread),
+                             ("Clicker 2", self.clicker2_thread),
+                             ("Key presser", self.keypresser_thread)]:
+            if thread and thread.is_alive():
+                thread.join(timeout=1.0)
+                if thread.is_alive():
+                    print(f"Warning: {name} thread did not exit cleanly")
         self.window.destroy()
 
     # Update feature methods

@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Dual AutoClicker** is a Python desktop application that provides automated mouse clicking functionality with dual clicker support. It features a tkinter GUI and supports both pynput (cross-platform) and evdev (Linux-specific) backends.
+**Dual AutoClicker + Key Presser** is a Python desktop application that provides automated mouse clicking and keyboard key pressing functionality with dual clicker support. It features a tkinter GUI and supports both pynput (cross-platform) and evdev (Linux-specific) backends.
 
-**Version:** 1.4.3
+**Version:** 1.5.0
 
 ## Files Structure
 
@@ -35,8 +35,8 @@ python -m pytest test_autoclicker.py -v
 
 ### Backend Selection
 
-- **autoclicker.py (pynput)**: Uses pynput library for mouse control and keyboard hotkey detection. Works on Windows, macOS, and Linux with X11.
-- **autoclicker_evdev.py (evdev)**: Uses evdev for keyboard input and uinput for mouse output. Required for Wayland or games that don't detect pynput events.
+- **autoclicker.py (pynput)**: Uses pynput library for mouse control, keyboard key pressing, and hotkey detection. Works on Windows, macOS, and Linux with X11. Includes keyboard key presser and emergency stop.
+- **autoclicker_evdev.py (evdev)**: Uses evdev for keyboard input and uinput for mouse/keyboard output. Required for Wayland or games that don't detect pynput events.
 
 ### Core Components
 
@@ -139,6 +139,7 @@ python -m pytest test_autoclicker.py --tb=short  # Shorter output
 
 1. **evdev version requires root**: Needs uinput access, could use udev rules instead
 2. **No per-clicker mouse button selection**: Both clickers use left-click
+3. **No mouse button selection for keyboard presser**: Only keyboard keys supported
 
 ## Recent Fixes (January 2026)
 
@@ -169,8 +170,8 @@ python -m pytest test_autoclicker.py --tb=short  # Shorter output
 
 ## Review Status
 
-> **Last Full Review:** 2026-01-10
-> **Status:** ✅ Production Ready
+> **Last Full Review:** 2026-03-15
+> **Status:** Production Ready
 
 ### Security Review ✅
 - [x] Path traversal protection (config paths validated)
