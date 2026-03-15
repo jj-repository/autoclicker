@@ -23,7 +23,7 @@ from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.7.0"
+__version__ = "1.7.1"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"
@@ -66,7 +66,7 @@ class DualAutoClicker:
         self.window = tk.Tk()
         self.window.title("Dual AutoClicker + Key Presser")
         self.window.geometry("580x1030")
-        self.window.resizable(False, False)
+        self.window.minsize(480, 800)
 
         # Theme state
         self.dark_mode = True
