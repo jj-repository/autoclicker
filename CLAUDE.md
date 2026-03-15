@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Dual AutoClicker + Key Presser** is a Python desktop application that provides automated mouse clicking and keyboard key pressing functionality with dual clicker support. It features a tkinter GUI and supports both pynput (cross-platform) and evdev (Linux-specific) backends.
 
-**Version:** 1.5.0
+**Version:** 1.6.0
 
 ## Files Structure
 

@@ -25,7 +25,7 @@ jobs:
     - name: Build Linux executables
       run: |
         pyinstaller --onefile --name autoclicker-evdev autoclicker_evdev.py
-        pyinstaller --onefile --name autoclicker-basic autoclicker.py
+        pyinstaller --onefile --name autoclicker-basic --add-data "takodachi.png:." autoclicker.py
 
     - name: Upload Linux artifacts
       uses: actions/upload-artifact@v4
@@ -52,7 +52,7 @@ jobs:
 
     - name: Build Windows executables
       run: |
-        pyinstaller --onefile --windowed --name autoclicker autoclicker.py
+        pyinstaller --onefile --windowed --name autoclicker --add-data "takodachi.png;." autoclicker.py
 
     - name: Upload Windows artifacts
       uses: actions/upload-artifact@v4

@@ -23,7 +23,7 @@ from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"
@@ -41,11 +41,48 @@ MAX_DOWNLOAD_SIZE = 5 * 1024 * 1024  # 5MB max download size for updates
 
 
 class DualAutoClicker:
+    # Dark mode color scheme
+    BG_COLOR = "#1e1e1e"
+    FG_COLOR = "#d4d4d4"
+    ACCENT_COLOR = "#264f78"
+    ENTRY_BG = "#2d2d2d"
+    ENTRY_FG = "#d4d4d4"
+    BUTTON_BG = "#3c3c3c"
+    STATUS_GREEN = "#4ec9b0"
+    STATUS_RED = "#f44747"
+    STATUS_ORANGE = "#ce9178"
+
     def __init__(self):
         self.window = tk.Tk()
         self.window.title("Dual AutoClicker + Key Presser")
         self.window.geometry("750x850")
         self.window.resizable(True, True)
+        self.window.configure(bg=self.BG_COLOR)
+
+        # Dark mode ttk style
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure('.', background=self.BG_COLOR, foreground=self.FG_COLOR,
+                        fieldbackground=self.ENTRY_BG, borderwidth=0)
+        style.configure('TFrame', background=self.BG_COLOR)
+        style.configure('TLabel', background=self.BG_COLOR, foreground=self.FG_COLOR)
+        style.configure('TButton', background=self.BUTTON_BG, foreground=self.FG_COLOR,
+                        padding=(8, 4))
+        style.map('TButton', background=[('active', self.ACCENT_COLOR)])
+        style.configure('TEntry', fieldbackground=self.ENTRY_BG, foreground=self.ENTRY_FG)
+        style.configure('TCheckbutton', background=self.BG_COLOR, foreground=self.FG_COLOR)
+        style.configure('TSeparator', background='#404040')
+
+        # Load takodachi image for About dialog
+        self._about_image = None
+        try:
+            # PyInstaller bundles files into sys._MEIPASS; dev mode uses __file__ dir
+            base_dir = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
+            img_path = base_dir / "takodachi.png"
+            if img_path.exists():
+                self._about_image = tk.PhotoImage(file=str(img_path))
+        except Exception:
+            pass
 
         # Config file path
         if sys.platform == 'win32':
@@ -378,7 +415,7 @@ class DualAutoClicker:
         kp_status_label.grid(row=13, column=2, sticky=tk.W, pady=(15, 5))
 
         self.keypresser_status_var = tk.StringVar(value="Idle")
-        self.keypresser_status_label = tk.Label(main_frame, textvariable=self.keypresser_status_var, font=("Arial", 10, "bold"), fg="green")
+        self.keypresser_status_label = tk.Label(main_frame, textvariable=self.keypresser_status_var, font=("Arial", 10, "bold"), fg=self.STATUS_GREEN, bg=self.BG_COLOR)
         self.keypresser_status_label.grid(row=14, column=2, pady=5)
 
         # Emergency Stop Section
@@ -409,12 +446,7 @@ class DualAutoClicker:
         )
         instructions.grid(row=21, column=0, columnspan=3, pady=(30, 0))
 
-        # Check for Updates button
-        ttk.Button(
-            main_frame,
-            text="Check for Updates",
-            command=self._check_for_updates_clicked
-        ).grid(row=22, column=0, columnspan=3, pady=(10, 0))
+        # (Check for Updates is available via Help menu)
 
     def _setup_clicker1_ui(self, parent, column, start_row):
         """Setup UI for Clicker 1"""
@@ -452,7 +484,7 @@ class DualAutoClicker:
 
         # Status
         self.status1_var = tk.StringVar(value="Idle")
-        self.status1_label = tk.Label(parent, textvariable=self.status1_var, font=("Arial", 10, "bold"), fg="green")
+        self.status1_label = tk.Label(parent, textvariable=self.status1_var, font=("Arial", 10, "bold"), fg=self.STATUS_GREEN, bg=self.BG_COLOR)
         self.status1_label.grid(row=start_row+6, column=column, pady=(10, 5))
 
     def _setup_clicker2_ui(self, parent, column, start_row):
@@ -491,7 +523,7 @@ class DualAutoClicker:
 
         # Status
         self.status2_var = tk.StringVar(value="Idle")
-        self.status2_label = tk.Label(parent, textvariable=self.status2_var, font=("Arial", 10, "bold"), fg="green")
+        self.status2_label = tk.Label(parent, textvariable=self.status2_var, font=("Arial", 10, "bold"), fg=self.STATUS_GREEN, bg=self.BG_COLOR)
         self.status2_label.grid(row=start_row+6, column=column, pady=(10, 5))
 
     def _apply_interval(self, interval_var, target_attr, name):
@@ -537,8 +569,10 @@ class DualAutoClicker:
         dialog.geometry("300x150")
         dialog.resizable(False, False)
         dialog.grab_set()
+        dialog.configure(bg=self.BG_COLOR)
 
-        label = ttk.Label(dialog, text="Press any key...", font=("Arial", 12))
+        label = tk.Label(dialog, text="Press any key...", font=("Arial", 12),
+                         bg=self.BG_COLOR, fg=self.FG_COLOR)
         label.pack(pady=40)
 
         def on_key_press(event):
@@ -740,7 +774,7 @@ class DualAutoClicker:
             if not self.clicker1_clicking:
                 self.clicker1_clicking = True
                 self._safe_after(0, lambda: self.status1_var.set("Clicking..."))
-                self._safe_after(0, lambda: self.status1_label.config(fg="red"))
+                self._safe_after(0, lambda: self.status1_label.config(fg=self.STATUS_RED))
                 self.clicker1_thread = threading.Thread(target=self._click_loop1, daemon=True)
                 self.clicker1_thread.start()
 
@@ -749,14 +783,14 @@ class DualAutoClicker:
             if self.clicker1_clicking:
                 self.clicker1_clicking = False
                 self._safe_after(0, lambda: self.status1_var.set("Idle"))
-                self._safe_after(0, lambda: self.status1_label.config(fg="green"))
+                self._safe_after(0, lambda: self.status1_label.config(fg=self.STATUS_GREEN))
 
     def start_clicker2(self):
         with self.clicker2_lock:
             if not self.clicker2_clicking:
                 self.clicker2_clicking = True
                 self._safe_after(0, lambda: self.status2_var.set("Clicking..."))
-                self._safe_after(0, lambda: self.status2_label.config(fg="red"))
+                self._safe_after(0, lambda: self.status2_label.config(fg=self.STATUS_RED))
                 self.clicker2_thread = threading.Thread(target=self._click_loop2, daemon=True)
                 self.clicker2_thread.start()
 
@@ -765,7 +799,7 @@ class DualAutoClicker:
             if self.clicker2_clicking:
                 self.clicker2_clicking = False
                 self._safe_after(0, lambda: self.status2_var.set("Idle"))
-                self._safe_after(0, lambda: self.status2_label.config(fg="green"))
+                self._safe_after(0, lambda: self.status2_label.config(fg=self.STATUS_GREEN))
 
     def _click_loop1(self):
         """Click loop for clicker 1 with error handling"""
@@ -782,7 +816,7 @@ class DualAutoClicker:
                 with self.clicker1_lock:
                     self.clicker1_clicking = False
                 self._safe_after(0, lambda: self.status1_var.set("Error"))
-                self._safe_after(0, lambda: self.status1_label.config(fg="orange"))
+                self._safe_after(0, lambda: self.status1_label.config(fg=self.STATUS_ORANGE))
                 break
 
             time.sleep(interval)
@@ -802,7 +836,7 @@ class DualAutoClicker:
                 with self.clicker2_lock:
                     self.clicker2_clicking = False
                 self._safe_after(0, lambda: self.status2_var.set("Error"))
-                self._safe_after(0, lambda: self.status2_label.config(fg="orange"))
+                self._safe_after(0, lambda: self.status2_label.config(fg=self.STATUS_ORANGE))
                 break
 
             time.sleep(interval)
@@ -820,7 +854,7 @@ class DualAutoClicker:
             if not self.keypresser_pressing:
                 self.keypresser_pressing = True
                 self._safe_after(0, lambda: self.keypresser_status_var.set("Pressing..."))
-                self._safe_after(0, lambda: self.keypresser_status_label.config(fg="red"))
+                self._safe_after(0, lambda: self.keypresser_status_label.config(fg=self.STATUS_RED))
                 self.keypresser_thread = threading.Thread(target=self._keypresser_loop, daemon=True)
                 self.keypresser_thread.start()
 
@@ -829,7 +863,7 @@ class DualAutoClicker:
             if self.keypresser_pressing:
                 self.keypresser_pressing = False
                 self._safe_after(0, lambda: self.keypresser_status_var.set("Idle"))
-                self._safe_after(0, lambda: self.keypresser_status_label.config(fg="green"))
+                self._safe_after(0, lambda: self.keypresser_status_label.config(fg=self.STATUS_GREEN))
 
     def _keypresser_loop(self):
         """Key press loop with error handling"""
@@ -846,7 +880,7 @@ class DualAutoClicker:
                 with self.keypresser_lock:
                     self.keypresser_pressing = False
                 self._safe_after(0, lambda: self.keypresser_status_var.set("Error"))
-                self._safe_after(0, lambda: self.keypresser_status_label.config(fg="orange"))
+                self._safe_after(0, lambda: self.keypresser_status_label.config(fg=self.STATUS_ORANGE))
                 break
 
             time.sleep(interval)
@@ -896,13 +930,46 @@ class DualAutoClicker:
 
     # Update feature methods
     def _show_about(self):
-        """Show about dialog."""
-        messagebox.showinfo(
-            "About",
-            f"Dual AutoClicker v{__version__}\n\n"
-            "A cross-platform dual autoclicker with configurable hotkeys.\n\n"
-            "https://github.com/jj-repository/autoclicker"
-        )
+        """Show about dialog with clickable link and image."""
+        dialog = tk.Toplevel(self.window)
+        dialog.title("About")
+        dialog.configure(bg=self.BG_COLOR)
+        dialog.transient(self.window)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        tk.Label(dialog, text=f"Dual AutoClicker + Key Presser",
+                 font=("Arial", 14, "bold"), bg=self.BG_COLOR, fg=self.FG_COLOR
+                 ).pack(pady=(20, 5))
+
+        tk.Label(dialog, text=f"v{__version__}",
+                 font=("Arial", 10), bg=self.BG_COLOR, fg="#808080"
+                 ).pack(pady=(0, 10))
+
+        tk.Label(dialog, text="A cross-platform dual autoclicker\nwith keyboard presser and configurable hotkeys.",
+                 justify=tk.CENTER, bg=self.BG_COLOR, fg=self.FG_COLOR
+                 ).pack(pady=(0, 10))
+
+        # Clickable GitHub link
+        link = tk.Label(dialog, text="github.com/jj-repository/autoclicker",
+                        fg="#3794ff", bg=self.BG_COLOR, cursor="hand2",
+                        font=("Arial", 10, "underline"))
+        link.pack(pady=(0, 15))
+        link.bind("<Button-1>", lambda e: __import__('webbrowser').open("https://github.com/jj-repository/autoclicker"))
+
+        # Takodachi image
+        if self._about_image:
+            tk.Label(dialog, image=self._about_image, bg=self.BG_COLOR).pack(pady=(5, 5))
+
+        tk.Label(dialog, text="by JJ", font=("Arial", 11, "italic"),
+                 bg=self.BG_COLOR, fg="#808080").pack(pady=(0, 15))
+
+        ttk.Button(dialog, text="OK", command=dialog.destroy).pack(pady=(0, 20))
+
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() - dialog.winfo_reqwidth()) // 2
+        y = (dialog.winfo_screenheight() - dialog.winfo_reqheight()) // 2
+        dialog.geometry(f"+{x}+{y}")
 
     def _version_newer(self, latest, current):
         """
