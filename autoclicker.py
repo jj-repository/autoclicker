@@ -23,7 +23,7 @@ from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.8.2"
+__version__ = "1.8.3"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"
@@ -730,10 +730,10 @@ class DualAutoClicker:
         """Perform a single left mouse click using pynput"""
         self.mouse_controller.click(mouse.Button.left, 1)
 
-    def perform_keypress(self):
+    def perform_keypress(self, target_key):
         """Perform a single key press using pynput"""
-        self.keyboard_controller.press(self.keypresser_target_key)
-        self.keyboard_controller.release(self.keypresser_target_key)
+        self.keyboard_controller.press(target_key)
+        self.keyboard_controller.release(target_key)
 
     def get_key_display_name(self, key):
         # Handle special keys
@@ -905,9 +905,10 @@ class DualAutoClicker:
                 if not self.keypresser_pressing:
                     break
                 interval = self.keypresser_interval
+                target_key = self.keypresser_target_key
 
             try:
-                self.perform_keypress()
+                self.perform_keypress(target_key)
             except Exception as e:
                 print(f"Error in key presser: {e}")
                 with self.keypresser_lock:
@@ -1084,7 +1085,10 @@ class DualAutoClicker:
                 headers={'User-Agent': f'DualAutoClicker/{__version__}'}
             )
             with urllib.request.urlopen(request, timeout=10) as response:
-                data = json.loads(response.read().decode())
+                raw = response.read(1024 * 1024 + 1)  # 1MB limit
+                if len(raw) > 1024 * 1024:
+                    raise ValueError("API response too large")
+                data = json.loads(raw.decode())
 
             latest_version = data.get('tag_name', '').lstrip('v')
 
