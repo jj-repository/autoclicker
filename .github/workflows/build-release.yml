@@ -24,14 +24,14 @@ jobs:
 
     - name: Build Linux executable
       run: |
-        pyinstaller --onefile --name autoclicker-linux autoclicker_evdev.py
+        pyinstaller --onefile --name Autoclicker-Linux autoclicker_evdev.py
 
     - name: Upload Linux artifacts
       uses: actions/upload-artifact@v4
       with:
         name: linux-executables
         path: |
-          dist/autoclicker-linux
+          dist/Autoclicker-Linux
 
   build-windows:
     runs-on: windows-latest
@@ -50,14 +50,14 @@ jobs:
 
     - name: Build Windows executable
       run: |
-        pyinstaller --onefile --windowed --name autoclicker-portable-win --add-data "takodachi.png;." autoclicker.py
+        pyinstaller --onefile --windowed --name Autoclicker-Windows --add-data "takodachi.png;." autoclicker.py
 
     - name: Upload Windows artifacts
       uses: actions/upload-artifact@v4
       with:
         name: windows-executables
         path: |
-          dist/autoclicker-portable-win.exe
+          dist/Autoclicker-Windows.exe
 
   release:
     needs: [build-linux, build-windows]
@@ -82,32 +82,29 @@ jobs:
         path: dist/windows
 
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         files: |
-          dist/linux/autoclicker-linux
-          dist/windows/autoclicker-portable-win.exe
+          dist/linux/Autoclicker-Linux
+          dist/windows/Autoclicker-Windows.exe
         body: |
           ## Downloads
 
           | File | Platform |
           |------|----------|
-          | **autoclicker-portable-win.exe** | Windows (portable) |
-          | **autoclicker-linux** | Linux (requires sudo) |
+          | **Autoclicker-Windows.exe** | Windows |
+          | **Autoclicker-Linux** | Linux (requires sudo) |
 
           ## Installation
 
           ### Windows
-          1. Download `autoclicker-portable-win.exe`
+          1. Download `Autoclicker-Windows.exe`
           2. Run it (may need Administrator privileges)
 
           ### Linux
-          1. Download `autoclicker-linux`
-          2. Make it executable: `chmod +x autoclicker-linux`
-          3. Run with sudo: `sudo ./autoclicker-linux`
-
-          ## What's New
-          See commit history for detailed changes.
+          1. Download `Autoclicker-Linux`
+          2. Make it executable: `chmod +x Autoclicker-Linux`
+          3. Run with sudo: `sudo ./Autoclicker-Linux`
 
           ---
           Built automatically with GitHub Actions
