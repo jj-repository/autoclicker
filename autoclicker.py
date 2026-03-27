@@ -23,7 +23,7 @@ from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.9.0"
+__version__ = "1.9.1"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"
@@ -64,7 +64,7 @@ class DualAutoClicker:
 
     def __init__(self):
         self.window = tk.Tk()
-        self.window.title("Dual AutoClicker + Key Presser")
+        self.window.title("AutoClicker")
         self.window.geometry("540x820")
         self.window.minsize(480, 500)
 
@@ -74,11 +74,26 @@ class DualAutoClicker:
         self.style.theme_use('clam')
         self._apply_theme()
 
+        # Load bundled assets (PyInstaller: sys._MEIPASS; dev: script dir)
+        base_dir = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
+
+        # Set window icon
+        try:
+            if sys.platform == 'win32':
+                ico_path = base_dir / 'icon.ico'
+                if ico_path.exists():
+                    self.window.iconbitmap(str(ico_path))
+            else:
+                png_path = base_dir / 'icon.png'
+                if png_path.exists():
+                    self._window_icon = tk.PhotoImage(file=str(png_path))
+                    self.window.iconphoto(True, self._window_icon)
+        except Exception:
+            pass
+
         # Load takodachi image for About dialog
         self._about_image = None
         try:
-            # PyInstaller bundles files into sys._MEIPASS; dev mode uses __file__ dir
-            base_dir = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
             img_path = base_dir / "takodachi.png"
             if img_path.exists():
                 self._about_image = tk.PhotoImage(file=str(img_path))
@@ -272,6 +287,13 @@ class DualAutoClicker:
             if 'auto_check_updates' in config:
                 self.auto_check_updates = bool(config.get('auto_check_updates', True))
 
+            # Restore window geometry
+            if 'window_geometry' in config:
+                try:
+                    self.window.geometry(config['window_geometry'])
+                except Exception:
+                    pass
+
         except json.JSONDecodeError as e:
             print(f"Error: Config file is corrupted: {e}")
         except (IOError, OSError) as e:
@@ -310,6 +332,7 @@ class DualAutoClicker:
                 'emergency_stop_hotkey': self._serialize_key(self.emergency_stop_hotkey),
                 'emergency_stop_hotkey_display': self.emergency_stop_hotkey_display,
                 'auto_check_updates': self.auto_check_updates,
+                'window_geometry': self.window.geometry(),
             }
 
             # Merge: existing values first, then overwrite with our values

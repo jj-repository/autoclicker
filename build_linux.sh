@@ -27,11 +27,11 @@ rm -rf build dist *.spec
 
 # Build evdev version (recommended - includes keyboard presser)
 echo "Building autoclicker-evdev (recommended version)..."
-pyinstaller --onefile --name autoclicker-evdev autoclicker_evdev.py
+pyinstaller --onefile --name autoclicker-evdev --add-data "icon.png:." --add-data "takodachi.png:." autoclicker_evdev.py
 
 # Build basic version
 echo "Building autoclicker-basic..."
-pyinstaller --onefile --name autoclicker-basic autoclicker.py
+pyinstaller --onefile --name autoclicker-basic --add-data "icon.png:." --add-data "takodachi.png:." autoclicker.py
 
 echo ""
 echo "Build complete! Executables are in the dist/ directory:"

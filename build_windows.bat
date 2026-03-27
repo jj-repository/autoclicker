@@ -18,7 +18,7 @@ if exist *.spec del *.spec
 
 REM Build basic version (the only version that works on Windows)
 echo Building autoclicker...
-pyinstaller --onefile --windowed --name autoclicker autoclicker.py
+pyinstaller --onefile --windowed --name autoclicker --icon=icon.ico --add-data "icon.ico;." --add-data "icon.png;." --add-data "takodachi.png;." autoclicker.py
 
 echo.
 echo Build complete! Executable is in the dist\ directory:
