@@ -1173,21 +1173,33 @@ class DualAutoClicker:
         y = (dialog.winfo_screenheight() - dialog.winfo_height()) // 2
         dialog.geometry(f"+{x}+{y}")
 
-    def _apply_update(self, release_data):
-        """
-        Download and apply update with SHA256 checksum verification.
+    def _compute_git_blob_sha(self, content):
+        """Compute git blob SHA1 (same as git hash-object)."""
+        import hashlib
+        header = f"blob {len(content)}\0".encode()
+        return hashlib.sha1(header + content).hexdigest()
 
-        Security measures:
-        - SHA256 checksum verification BEFORE any file operations
-        - Atomic file replacement using os.replace()
-        - Temp file created in same directory as target for atomic replace
-        - Backup created before replacement
-        - All file operations are verified
-        """
+    def _verify_file_against_github(self, tag_name, filename, content, headers):
+        """Verify content matches GitHub's git tree SHA for this release tag."""
+        import urllib.request
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}?ref={tag_name}"
+        request = urllib.request.Request(api_url, headers=headers)
+        with urllib.request.urlopen(request, timeout=30) as response:
+            file_info = json.loads(response.read().decode())
+        expected_sha = file_info.get('sha', '')
+        actual_sha = self._compute_git_blob_sha(content)
+        if actual_sha != expected_sha:
+            raise RuntimeError(
+                f"Integrity check failed for {filename}!\n"
+                f"Expected SHA: {expected_sha[:16]}...\n"
+                f"Got SHA: {actual_sha[:16]}..."
+            )
+
+    def _apply_update(self, release_data):
+        """Download and apply update with git blob SHA integrity verification."""
         import urllib.request
         import urllib.error
         import shutil
-        import hashlib
         import os as os_module
 
         tmp_path = None
@@ -1235,40 +1247,8 @@ class DualAutoClicker:
         try:
             tag_name = release_data.get('tag_name', 'main')
             download_url = f"{GITHUB_RAW_URL}/{tag_name}/autoclicker.py"
-            checksum_url = f"{GITHUB_RAW_URL}/{tag_name}/autoclicker.py.sha256"
 
             headers = {'User-Agent': f'DualAutoClicker/{__version__}'}
-
-            # First, download and validate the checksum file
-            expected_checksum = None
-            try:
-                checksum_request = urllib.request.Request(checksum_url, headers=headers)
-                with urllib.request.urlopen(checksum_request, timeout=30) as response:
-                    checksum_content = response.read().decode().strip()
-                    # Validate checksum file is not empty
-                    if not checksum_content:
-                        raise ValueError("Checksum file is empty")
-                    # Format: "sha256hash  filename" or just "sha256hash"
-                    parts = checksum_content.split()
-                    if not parts:
-                        raise ValueError("Checksum file contains no valid hash")
-                    expected_checksum = parts[0].lower()
-                    # Validate checksum format (must be exactly 64 hex characters)
-                    if len(expected_checksum) != 64 or not all(c in '0123456789abcdef' for c in expected_checksum):
-                        raise ValueError("Invalid checksum format - not a valid SHA256 hash")
-            except urllib.error.HTTPError as e:
-                if e.code == 404:
-                    # Checksum file doesn't exist - abort for security
-                    self._safe_after(0, lambda: messagebox.showwarning(
-                        "Update Aborted",
-                        "No checksum file found for this release.\n\n"
-                        "This means the update cannot be verified for integrity.\n\n"
-                        "For your security, updates without checksums are not allowed.\n\n"
-                        "Please download the update manually from:\n"
-                        f"{GITHUB_RELEASES_URL}"
-                    ))
-                    return
-                raise
 
             # Download the update file in chunks with progress reporting
             request = urllib.request.Request(download_url, headers=headers)
@@ -1312,22 +1292,10 @@ class DualAutoClicker:
                                          _update_progress_dialog(p, m, t))
                 content = b''.join(chunks)
 
-            # CRITICAL: Verify checksum BEFORE any file operations
-            sha256_hash = hashlib.sha256(content).hexdigest().lower()
+            # Verify integrity using git blob SHA against GitHub Contents API
+            self._verify_file_against_github(tag_name, 'autoclicker.py', content, headers)
 
-            if sha256_hash != expected_checksum:
-                self._safe_after(0, lambda: messagebox.showerror(
-                    "Security Error",
-                    "CHECKSUM VERIFICATION FAILED!\n\n"
-                    f"Expected: {expected_checksum}\n"
-                    f"Got: {sha256_hash}\n\n"
-                    "The downloaded file may have been tampered with.\n"
-                    "Update has been aborted for your safety.\n\n"
-                    "Please report this issue on GitHub."
-                ))
-                return
-
-            # Checksum verified - now perform atomic file operations
+            # Integrity verified - now perform atomic file operations
             current_script = Path(__file__).resolve()
             script_dir = current_script.parent
             backup_path = current_script.with_suffix('.py.backup')
@@ -1346,19 +1314,6 @@ class DualAutoClicker:
                 self._safe_after(0, lambda: messagebox.showerror(
                     "Update Failed",
                     f"Failed to write update file:\n{write_error}"
-                ))
-                return
-
-            # Verify the written file matches (defense against write errors)
-            try:
-                with open(tmp_path, 'rb') as f:
-                    written_hash = hashlib.sha256(f.read()).hexdigest().lower()
-                if written_hash != expected_checksum:
-                    raise ValueError("Written file checksum doesn't match")
-            except Exception as verify_error:
-                self._safe_after(0, lambda: messagebox.showerror(
-                    "Update Failed",
-                    f"Failed to verify written file:\n{verify_error}"
                 ))
                 return
 
