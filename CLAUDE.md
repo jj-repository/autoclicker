@@ -4,9 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Dual AutoClicker + Key Presser** is a Python desktop application that provides automated mouse clicking and keyboard key pressing functionality with dual clicker support. It features a tkinter GUI and supports both pynput (cross-platform) and evdev (Linux-specific) backends.
+**AutoClicker** is a Python desktop application that provides automated mouse clicking and keyboard key pressing functionality with dual clicker support. It features a tkinter GUI and supports both pynput (cross-platform) and evdev (Linux-specific) backends.
 
-**Version:** 1.7.0
+**Version:** 1.9.4
+
+## Versioning
+
+Version bumps default to **+0.0.1** (patch) unless explicitly told otherwise.
+
+## IMPORTANT: Checksum Rule
+
+**Every time `autoclicker.py` is modified, regenerate `autoclicker.py.sha256` before committing:**
+
+```bash
+sha256sum autoclicker.py > autoclicker.py.sha256
+```
+
+The in-app update system fetches this file from the tagged commit on GitHub to verify the download. If it's missing or stale, users will see "No checksum file found" and the update will be blocked. The CI workflow validates the checksum matches on every build.
 
 ## Files Structure
 

@@ -22,6 +22,10 @@ jobs:
         python -m pip install --upgrade pip
         pip install pyinstaller pynput evdev
 
+    - name: Verify checksum file is current
+      run: |
+        sha256sum -c autoclicker.py.sha256
+
     - name: Build Linux executable
       run: |
         pyinstaller --onefile --name Autoclicker-Linux --add-data "icon.png:." --add-data "takodachi.png:." autoclicker_evdev.py
