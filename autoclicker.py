@@ -23,7 +23,7 @@ from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.9.1"
+__version__ = "1.9.2"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"
@@ -1191,6 +1191,46 @@ class DualAutoClicker:
 
         tmp_path = None
 
+        # Progress dialog state (populated on main thread via _safe_after)
+        progress_state = {'dialog': None, 'label': None, 'bar': None}
+
+        def _create_progress_dialog():
+            t = self._t
+            dlg = tk.Toplevel(self.window)
+            dlg.title('Downloading Update')
+            dlg.geometry('360x90')
+            dlg.resizable(False, False)
+            dlg.transient(self.window)
+            dlg.grab_set()
+            dlg.protocol('WM_DELETE_WINDOW', lambda: None)
+            dlg.configure(bg=t['bg'])
+            lbl = tk.Label(dlg, text='Downloading update...', bg=t['bg'], fg=t['fg'])
+            lbl.pack(pady=(12, 4))
+            bar = ttk.Progressbar(dlg, length=320, mode='determinate', maximum=100)
+            bar.pack(padx=20, pady=(0, 12))
+            progress_state['dialog'] = dlg
+            progress_state['label'] = lbl
+            progress_state['bar'] = bar
+
+        def _update_progress_dialog(pct, mb, total_mb):
+            if progress_state['label']:
+                progress_state['label'].config(
+                    text=f'Downloading update... {mb:.1f}/{total_mb:.1f} MB ({pct}%)'
+                )
+            if progress_state['bar']:
+                progress_state['bar']['value'] = pct
+
+        def _close_progress_dialog():
+            if progress_state['dialog']:
+                try:
+                    progress_state['dialog'].grab_release()
+                    progress_state['dialog'].destroy()
+                except tk.TclError:
+                    pass
+                progress_state['dialog'] = None
+
+        self._safe_after(0, _create_progress_dialog)
+
         try:
             tag_name = release_data.get('tag_name', 'main')
             download_url = f"{GITHUB_RAW_URL}/{tag_name}/autoclicker.py"
@@ -1229,34 +1269,47 @@ class DualAutoClicker:
                     return
                 raise
 
-            # Download the update file to memory first with size validation
+            # Download the update file in chunks with progress reporting
             request = urllib.request.Request(download_url, headers=headers)
             with urllib.request.urlopen(request, timeout=60) as response:
-                # Check Content-Length header before reading
                 content_length = response.headers.get('Content-Length')
+                total_bytes = 0
                 if content_length:
                     try:
-                        size = int(content_length)
-                        if size > MAX_DOWNLOAD_SIZE:
+                        total_bytes = int(content_length)
+                        if total_bytes > MAX_DOWNLOAD_SIZE:
                             self._safe_after(0, lambda: messagebox.showerror(
                                 "Update Failed",
-                                f"Update file too large ({size / 1024 / 1024:.1f}MB).\n"
+                                f"Update file too large ({total_bytes / 1024 / 1024:.1f}MB).\n"
                                 f"Maximum allowed: {MAX_DOWNLOAD_SIZE / 1024 / 1024:.1f}MB\n\n"
                                 "This may indicate a compromised update. Please download manually."
                             ))
                             return
                     except ValueError:
-                        pass  # Invalid Content-Length, proceed with caution
+                        pass
 
-                # Read with size limit
-                content = response.read(MAX_DOWNLOAD_SIZE + 1)
-                if len(content) > MAX_DOWNLOAD_SIZE:
-                    self._safe_after(0, lambda: messagebox.showerror(
-                        "Update Failed",
-                        f"Update file exceeds maximum size ({MAX_DOWNLOAD_SIZE / 1024 / 1024:.1f}MB).\n\n"
-                        "This may indicate a compromised update. Please download manually."
-                    ))
-                    return
+                chunks = []
+                downloaded = 0
+                while True:
+                    chunk = response.read(64 * 1024)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    downloaded += len(chunk)
+                    if downloaded > MAX_DOWNLOAD_SIZE:
+                        self._safe_after(0, lambda: messagebox.showerror(
+                            "Update Failed",
+                            f"Update file exceeds maximum size ({MAX_DOWNLOAD_SIZE / 1024 / 1024:.1f}MB).\n\n"
+                            "This may indicate a compromised update. Please download manually."
+                        ))
+                        return
+                    if total_bytes > 0:
+                        pct = int(downloaded / total_bytes * 100)
+                        mb = downloaded / (1024 * 1024)
+                        total_mb = total_bytes / (1024 * 1024)
+                        self._safe_after(0, lambda p=pct, m=mb, t=total_mb:
+                                         _update_progress_dialog(p, m, t))
+                content = b''.join(chunks)
 
             # CRITICAL: Verify checksum BEFORE any file operations
             sha256_hash = hashlib.sha256(content).hexdigest().lower()
@@ -1366,20 +1419,33 @@ class DualAutoClicker:
                 ))
                 return
 
-            self._safe_after(0, lambda: messagebox.showinfo(
-                "Update Complete",
-                "Update downloaded and verified successfully!\n\n"
-                f"SHA256: {sha256_hash[:16]}...{sha256_hash[-8:]}\n"
-                f"Backup saved to: {backup_path.name}\n\n"
-                "Please restart the application to apply the update."
-            ))
+            # Clean up backup and any leftover .old file
+            for _stale in [backup_path, current_script.with_suffix('.py.old')]:
+                try:
+                    if _stale.exists():
+                        _stale.unlink()
+                except OSError:
+                    pass
+
+            def _on_update_complete():
+                _close_progress_dialog()
+                messagebox.showinfo(
+                    "Update Applied",
+                    "AutoClicker has been updated successfully!\n\n"
+                    "Please relaunch AutoClicker to run the new version."
+                )
+                self.on_closing()
+
+            self._safe_after(0, _on_update_complete)
 
         except urllib.error.URLError as e:
+            self._safe_after(0, lambda: _close_progress_dialog())
             self._safe_after(0, lambda: messagebox.showerror(
                 "Update Failed",
                 f"Network error while downloading update:\n{e}"
             ))
         except Exception as e:
+            self._safe_after(0, lambda: _close_progress_dialog())
             self._safe_after(0, lambda: messagebox.showerror(
                 "Update Failed",
                 f"Unexpected error during update:\n{type(e).__name__}: {e}"
