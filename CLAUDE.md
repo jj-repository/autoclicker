@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**AutoClicker** is a Python desktop application that provides automated mouse clicking and keyboard key pressing functionality with dual clicker support. It features a tkinter GUI and supports both pynput (cross-platform) and evdev (Linux-specific) backends.
+**AutoClicker** is a Python desktop application that provides automated mouse clicking and keyboard key pressing functionality with dual clicker support. It features a PyQt6 GUI (using the GUI-Template pattern) and supports both pynput (cross-platform) and evdev (Linux-specific) backends.
 
-**Version:** 1.9.4
+**Version:** 2.0.0
 
 ## Versioning
 
@@ -26,8 +26,8 @@ The in-app update system fetches this file from the tagged commit on GitHub to v
 
 ```
 autoclicker/
-├── autoclicker.py          # Main application (pynput backend - cross-platform)
-├── autoclicker_evdev.py    # Linux/Wayland version using evdev + uinput
+├── autoclicker.py          # Main application (pynput backend - cross-platform, PyQt6 GUI)
+├── autoclicker_evdev.py    # Linux/Wayland version using evdev + uinput (tkinter GUI)
 ├── test_autoclicker.py     # Unit tests (37 tests)
 └── CLAUDE.md               # This file
 ```
@@ -36,6 +36,7 @@ autoclicker/
 
 ```bash
 # Cross-platform version (Windows, macOS, Linux X11)
+pip install -r requirements.txt
 python autoclicker.py
 
 # Linux with Wayland or games requiring low-level input
@@ -49,15 +50,19 @@ python -m pytest test_autoclicker.py -v
 
 ### Backend Selection
 
-- **autoclicker.py (pynput)**: Uses pynput library for mouse control, keyboard key pressing, and hotkey detection. Works on Windows, macOS, and Linux with X11. Includes keyboard key presser and emergency stop.
-- **autoclicker_evdev.py (evdev)**: Uses evdev for keyboard input and uinput for mouse/keyboard output. Required for Wayland or games that don't detect pynput events.
+- **autoclicker.py (pynput)**: Uses pynput library for mouse control, keyboard key pressing, and hotkey detection. PyQt6 GUI using the GUI-Template pattern. Works on Windows, macOS, and Linux with X11.
+- **autoclicker_evdev.py (evdev)**: Uses evdev for keyboard input and uinput for mouse/keyboard output. Required for Wayland or games that don't detect pynput events. Uses tkinter GUI (not migrated).
 
-### Core Components
+### GUI Structure (autoclicker.py)
 
-1. **DualAutoClicker class**: Main application class containing all UI and logic
-2. **Thread-safe state**: Uses `threading.Lock()` for clicker state access
-3. **Hotkey system**: Global keyboard listener for start/stop hotkeys
-4. **Config persistence**: JSON config in `~/.config/autoclicker/config.json`
+Follows the GUI-Template pattern (`AppWindow(QMainWindow)`):
+
+- **Tabs:** Clicker 1, Clicker 2, Key Presser, [spacer], Settings, Help
+- **`_build_groups()`** — creates `_clicker1_group`, `_clicker2_group`, `_keypresser_group`
+- **`_build_tabs()`** — arranges groups into tabs via `_add_tab()`
+- **`_build_settings_tab()`** — Emergency Stop group + dark mode toggle + auto-update + mascot
+- **`_build_help_tab()`** — help sections + Readme/Report Bug buttons
+- **`self.widgets`** — registry for all named widgets
 
 ### Key Patterns
 
@@ -67,22 +72,33 @@ with self.clicker1_lock:
     self.clicker1_clicking = True
 ```
 
-**UI Updates from Threads:**
+**UI Updates from Threads (cross-thread safe):**
 ```python
-self.window.after(0, lambda: self._show_update_dialog(...))
+QTimer.singleShot(0, lambda: self._show_update_dialog(...))
 ```
 
 **Hotkey Rate Limiting:**
 - 200ms cooldown between hotkey presses to prevent rapid toggling
 
+**Config Load Guard:**
+```python
+self._loading = True
+# ... populate widgets ...
+self._loading = False
+```
+Prevents `valueChanged` signals from triggering `_save_config()` during load.
+
 ## Configuration
 
 **Config Path:** `~/.config/autoclicker/config.json`
 
-**Stored Settings:**
-- Clicker intervals (float, in seconds)
-- Hotkey assignments (serialized Key/KeyCode objects)
-- Hotkey display names
+**Stored Settings (backward compatible with v1.x):**
+- `clicker1_interval`, `clicker2_interval` (float, in seconds)
+- `keypresser_target_key_pynput`, `keypresser_target_key_display`
+- `clicker1_hotkey_pynput`, `clicker1_hotkey_display`
+- `clicker2_hotkey_pynput`, `clicker2_hotkey_display`
+- `keypresser_hotkey_pynput`, `keypresser_hotkey_display`
+- `emergency_stop_hotkey_pynput`, `emergency_stop_hotkey_display`
 
 **Interval Constraints:**
 - Minimum: 0.01s (10ms, 100 clicks/sec max)
@@ -95,8 +111,8 @@ self.window.after(0, lambda: self._show_update_dialog(...))
 **Components:**
 - `_check_for_updates()`: Fetches latest release from GitHub API
 - `_version_newer()`: Semantic version comparison
-- `_show_update_dialog()`: Modal dialog with Update Now / Open Releases / Later
-- `_apply_update()`: Downloads, verifies SHA256 checksum, backs up old file, applies update
+- `_show_update_dialog()`: QMessageBox with Update Now / Open Releases / Later
+- `_apply_update()`: Downloads, verifies SHA256 checksum, backs up old file, applies update, quits app
 
 **GitHub Integration:**
 - Repository: `jj-repository/autoclicker`
@@ -111,10 +127,9 @@ self.window.after(0, lambda: self._show_update_dialog(...))
 ## Dependencies
 
 ### autoclicker.py (pynput version)
-- `tkinter` (standard library)
+- `PyQt6>=6.5` - GUI framework
 - `pynput` - Mouse control and keyboard listening
-- `json` (standard library)
-- `threading` (standard library)
+- `json`, `threading`, `pathlib` (standard library)
 
 ### autoclicker_evdev.py
 - `tkinter` (standard library)
@@ -145,35 +160,22 @@ python -m pytest test_autoclicker.py --tb=short  # Shorter output
 - **Download size validation**: MAX_DOWNLOAD_SIZE (5MB) limit for update downloads
 - **SHA256 checksum verification**: Required for all updates
 - **Backup before update**: Creates `.py.backup` before applying updates
-- **Hotkey capture lock**: Thread-safe hotkey capture state (evdev version)
-- **Thread-safe UI updates**: Uses `_safe_after()` wrapper to prevent TclError crashes (evdev version)
+- **Hotkey capture lock**: Thread-safe hotkey capture state
+- **Thread-safe UI updates**: Uses `QTimer.singleShot()` for cross-thread UI scheduling
 - **Thread-safe hotkey timing**: Hotkey rate limiting protected by lock
-
-## Known Issues / Technical Debt
-
-1. **evdev version requires root**: Needs uinput access, could use udev rules instead
-2. **No per-clicker mouse button selection**: Both clickers use left-click
-3. **No mouse button selection for keyboard presser**: Only keyboard keys supported
-
-## Recent Fixes (January 2026)
-
-- Added `_safe_after()` method to evdev version for crash-safe UI callbacks from threads
-- Added exception handling for `KeyCode.from_char()` in key deserialization
-- Added thread-safe locking for hotkey rate limiting dictionary
-- Fixed IndexError when update checksum file is empty (added validation before split)
 
 ## Common Development Tasks
 
 ### Adding a new setting
-1. Add default value in `__init__`
-2. Add to `save_config()` serialization
-3. Add to `load_config()` deserialization with fallback
-4. Add UI control in `setup_ui()`
+1. Add default value in `_init_state()`
+2. Add to `_save_config()` serialization
+3. Add to `_load_config()` deserialization with fallback
+4. Add UI control in `_build_groups()`
 
 ### Modifying hotkey behavior
-- Key conversion: `_tk_key_to_evdev()` (evdev version)
 - Key serialization: `_serialize_key()` / `_deserialize_key()`
 - Display names: `_get_key_display_name()`
+- Capture: `_capture_hotkey(setter_fn, btn)`
 
 ### Testing changes
 - Mock evdev/pynput modules for platform-independent testing
@@ -184,7 +186,7 @@ python -m pytest test_autoclicker.py --tb=short  # Shorter output
 
 ## Review Status
 
-> **Last Full Review:** 2026-03-15
+> **Last Full Review:** 2026-03-27
 > **Status:** Production Ready
 
 ### Security Review ✅
@@ -199,36 +201,27 @@ python -m pytest test_autoclicker.py --tb=short  # Shorter output
 ### Thread Safety Review ✅
 - [x] Clicker state protected by locks
 - [x] Hotkey timing dictionary protected by lock
-- [x] UI updates via `_safe_after()` wrapper (evdev)
-- [x] Hotkey capture state protected (evdev)
+- [x] UI updates via `QTimer.singleShot()` (cross-thread safe)
+- [x] Hotkey capture state protected
 
 ### Code Quality ✅
 - [x] All tests passing (37 tests)
 - [x] No unused imports/variables
 - [x] Consistent error handling
-- [x] Logging implemented
-
-## Quality Standards
-
-**Target:** Personal utility tool - functional, secure, maintainable
-
-| Aspect | Standard | Status |
-|--------|----------|--------|
-| Test Coverage | Core logic tested | ✅ Met |
-| Security | No vulnerabilities in user input handling | ✅ Met |
-| Thread Safety | No race conditions in click/hotkey logic | ✅ Met |
-| Error Handling | Graceful failures, no crashes | ✅ Met |
-| Documentation | CLAUDE.md current | ✅ Met |
+- [x] PyQt6 GUI-Template pattern
 
 ## Intentional Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
+| PyQt6 GUI (v2.0) | Matches GUI-Template pattern used across other apps; better theming |
+| evdev version keeps tkinter | evdev version is Linux-only sudo tool; PyQt6 migration not needed |
 | Two separate files (pynput/evdev) | Different backends for different platforms, keeps code simpler than runtime switching |
 | Root required for evdev | uinput requires elevated privileges; udev rules would add setup complexity |
 | Left-click only | Simplicity; right-click selection would add UI complexity for minimal benefit |
 | 200ms hotkey cooldown | Prevents accidental double-toggles; tested value that feels responsive |
 | Config in ~/.config/ | Standard XDG location for Linux; works cross-platform |
+| Backward-compatible config keys | Same JSON keys as v1.x so existing user configs are preserved |
 
 ## Won't Fix (Accepted Limitations)
 
@@ -243,8 +236,9 @@ python -m pytest test_autoclicker.py --tb=short  # Shorter output
 
 - ✅ Thread-safe state management
 - ✅ Hotkey rate limiting
-- ✅ Safe UI updates from threads
+- ✅ Safe UI updates from threads (QTimer.singleShot)
 - ✅ Config persistence with validation
 - ✅ Update system with verification
-
-**DO NOT further optimize:** The click timing is already as precise as Python/tkinter allows. Lower-level timing would require rewriting in C/Rust.
+- ✅ PyQt6 GUI migration (v2.0.0)
+- ✅ Dark/light theme toggle
+- ✅ Window geometry persistence

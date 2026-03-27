@@ -1,816 +1,1774 @@
 #!/usr/bin/env python3
 """
-Dual AutoClicker + Key Presser - Cross-Platform Version (pynput)
+AutoClicker — Cross-Platform Version (pynput backend)
 
-This version uses pynput for mouse control, keyboard key pressing,
-and hotkey detection. Works on Windows, macOS, and Linux (X11).
+Uses pynput for mouse control, keyboard pressing, and hotkey detection.
+Works on Windows, macOS, and Linux (X11).
 
-Use this version when:
-- Running on Windows or macOS
-- Running on Linux with X11 (not Wayland)
-
-For Linux with Wayland or games that don't detect pynput input,
-use autoclicker_evdev.py instead (requires root/uinput permissions).
+For Linux Wayland or games requiring low-level input use autoclicker_evdev.py.
 """
-import tkinter as tk
-from tkinter import ttk, messagebox
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import platform
+import shutil
+import sys
+import tempfile
 import threading
 import time
-import json
-import sys
-import os
+import urllib.error
+import urllib.request
 from pathlib import Path
+
+from PyQt6.QtCore import Qt, QTimer, QByteArray, QUrl
+from PyQt6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PyQt6.QtWidgets import (
+    QApplication, QCheckBox, QDialog, QDoubleSpinBox,
+    QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
+    QProgressBar, QPushButton, QScrollArea, QTabWidget, QVBoxLayout,
+    QWidget,
+)
+
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.9.4"
+__version__ = "2.0.0"
 
-# Update Constants
-GITHUB_REPO = "jj-repository/autoclicker"
+# ── App identity ───────────────────────────────────────────────────────
+APP_NAME    = "AutoClicker"
+VERSION     = __version__
+WINDOW_SIZE = (500, 640)
+
+# ── Color palette ──────────────────────────────────────────────────────
+GREEN  = ("#2e7d32", "#388e3c")
+BLUE   = ("#1565c0", "#1976d2")
+YELLOW = ("#f9a825", "#fbc02d")
+RED    = ("#c62828", "#e53935")
+
+STATUS_IDLE   = "#4ec9b0"
+STATUS_ACTIVE = "#f44747"
+STATUS_ERROR  = "#ce9178"
+
+# ── Update constants ───────────────────────────────────────────────────
+GITHUB_REPO         = "jj-repository/autoclicker"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
-GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}"
+GITHUB_API_LATEST   = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_RAW_URL      = f"https://raw.githubusercontent.com/{GITHUB_REPO}"
 
-# Constants
-MIN_INTERVAL = 0.01  # Minimum interval: 10ms (100 clicks/sec max)
-MAX_INTERVAL = 60.0  # Maximum interval: 60 seconds
-DEFAULT_CLICKER1_INTERVAL = 0.1
-DEFAULT_CLICKER2_INTERVAL = 0.5
+# ── Clicker constants ──────────────────────────────────────────────────
+MIN_INTERVAL  = 0.01
+MAX_INTERVAL  = 60.0
+DEFAULT_CLICKER1_INTERVAL   = 0.1
+DEFAULT_CLICKER2_INTERVAL   = 0.5
 DEFAULT_KEYPRESSER_INTERVAL = 0.1
-MAX_DOWNLOAD_SIZE = 5 * 1024 * 1024  # 5MB max download size for updates
+MAX_DOWNLOAD_SIZE = 5 * 1024 * 1024
+
+_BASE_DIR = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
+
+# ── Mascot ─────────────────────────────────────────────────────────────
+_TAKO_B64 = (
+    "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"
+    "FtswQdgqAAAAAElFTkSuQmCC"
+)
+
+# ── Light theme QSS ───────────────────────────────────────────────────
+_LIGHT_STYLE = """
+QWidget { background-color: #f0f0f0; color: #1e1e1e; }
+QGroupBox { border: 1px solid #bbb; border-radius: 4px; margin-top: 8px; padding-top: 14px; }
+QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #1e1e1e; }
+QTabWidget::pane { border: 1px solid #bbb; }
+QTabBar::tab { background: #e0e0e0; padding: 6px 14px; border: 1px solid #bbb;
+               border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }
+QTabBar::tab:selected { background: #f0f0f0; }
+QTabBar::tab:!selected { margin-top: 2px; }
+QTabBar::tab:disabled { background: transparent; border: none; min-width: 40px; max-width: 40px; }
+QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit { background: #ffffff; color: #1e1e1e;
+               border: 1px solid #bbb; border-radius: 3px; padding: 2px; }
+QScrollArea { border: none; }
+QPushButton { background: #e0e0e0; color: #1e1e1e; border: 1px solid #bbb; border-radius: 3px; padding: 5px 12px; }
+QPushButton:hover { background: #d0d0d0; }
+QCheckBox { color: #1e1e1e; }
+QCheckBox::indicator { width: 14px; height: 14px; border: 2px solid #888; border-radius: 3px; background: #ffffff; }
+QCheckBox::indicator:checked { background: #2e7d32; border-color: #2e7d32; }
+QCheckBox::indicator:unchecked:hover { border-color: #555; }
+QCheckBox::indicator:disabled { background: #e0e0e0; border-color: #bbb; }
+QLabel { color: #1e1e1e; }
+QMessageBox { background-color: #f0f0f0; }
+QStatusBar { background: #e0e0e0; color: #555; }
+QToolTip { background: #ffffcc; color: #1e1e1e; border: 1px solid #bbb; }
+"""
 
 
-class DualAutoClicker:
-    # Color schemes
-    THEMES = {
-        'dark': {
-            'bg': '#1e1e1e', 'fg': '#d4d4d4', 'accent': '#264f78',
-            'entry_bg': '#2d2d2d', 'entry_fg': '#d4d4d4', 'button_bg': '#3c3c3c',
-            'green': '#4ec9b0', 'red': '#f44747', 'orange': '#ce9178',
-            'sep': '#404040', 'link': '#3794ff', 'muted': '#808080',
-        },
-        'light': {
-            'bg': '#f0f0f0', 'fg': '#1e1e1e', 'accent': '#0078d4',
-            'entry_bg': '#ffffff', 'entry_fg': '#1e1e1e', 'button_bg': '#e1e1e1',
-            'green': '#16825d', 'red': '#cd3131', 'orange': '#c17e00',
-            'sep': '#c8c8c8', 'link': '#0066cc', 'muted': '#6e6e6e',
-        },
-    }
+def _make_checkbox_images() -> tuple[str, str]:
+    """Generate dark-mode checked/unchecked checkbox PNGs; return (checked_path, unchecked_path)."""
+    d = tempfile.mkdtemp(prefix=f"{APP_NAME.lower()}_")
+    size = 18
 
-    @property
-    def _t(self):
-        """Current theme colors."""
-        return self.THEMES['dark' if self.dark_mode else 'light']
+    # Unchecked: dark box with gray border
+    unchecked = QPixmap(size, size)
+    unchecked.fill(QColor(0, 0, 0, 0))
+    p = QPainter(unchecked)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(QPen(QColor(136, 136, 136), 2))
+    p.setBrush(QColor(45, 45, 45))
+    p.drawRoundedRect(1, 1, size - 2, size - 2, 3, 3)
+    p.end()
+    unchecked_path = os.path.join(d, "cb_unchecked.png")
+    unchecked.save(unchecked_path)
+
+    # Checked: green box with white checkmark
+    checked = QPixmap(size, size)
+    checked.fill(QColor(0, 0, 0, 0))
+    p = QPainter(checked)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(46, 125, 50))
+    p.drawRoundedRect(1, 1, size - 2, size - 2, 3, 3)
+    pen = QPen(QColor(255, 255, 255), 2.5)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    path = QPainterPath()
+    path.moveTo(4, 9)
+    path.lineTo(7.5, 13)
+    path.lineTo(14, 5)
+    p.drawPath(path)
+    p.end()
+    checked_path = os.path.join(d, "cb_checked.png")
+    checked.save(checked_path)
+
+    return checked_path, unchecked_path
+
+
+def _build_dark_style() -> str:
+    """Build dark stylesheet with generated checkbox images."""
+    checked, unchecked = _make_checkbox_images()
+    checked = checked.replace("\\", "/")
+    unchecked = unchecked.replace("\\", "/")
+    return f"""
+QWidget {{ background-color: #1e1e1e; color: #dcdcdc; }}
+QGroupBox {{ border: 1px solid #444; border-radius: 4px; margin-top: 8px; padding-top: 14px; }}
+QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #dcdcdc; }}
+QTabWidget::pane {{ border: 1px solid #444; }}
+QTabBar::tab {{ background: #2d2d2d; padding: 6px 14px; border: 1px solid #444;
+               border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }}
+QTabBar::tab:selected {{ background: #1e1e1e; }}
+QTabBar::tab:!selected {{ margin-top: 2px; }}
+QTabBar::tab:disabled {{ background: transparent; border: none; min-width: 40px; max-width: 40px; }}
+QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit {{ background: #2d2d2d; color: #dcdcdc;
+               border: 1px solid #555; border-radius: 3px; padding: 2px; }}
+QScrollArea {{ border: none; }}
+QPushButton {{ background: #333; color: #dcdcdc; border: 1px solid #555; border-radius: 3px; padding: 5px 12px; }}
+QPushButton:hover {{ background: #444; }}
+QCheckBox {{ color: #dcdcdc; spacing: 6px; }}
+QCheckBox::indicator {{ width: 18px; height: 18px; }}
+QCheckBox::indicator:unchecked {{ image: url({unchecked}); }}
+QCheckBox::indicator:checked {{ image: url({checked}); }}
+QLabel {{ color: #dcdcdc; }}
+QMessageBox {{ background-color: #1e1e1e; }}
+QStatusBar {{ background: #2d2d2d; color: #aaa; }}
+QToolTip {{ background: #2d2d2d; color: #dcdcdc; border: 1px solid #555; }}
+"""
+
+
+# ── Config path ────────────────────────────────────────────────────────
+def _config_path() -> Path:
+    """Return path to config.json (backward-compatible location)."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA", Path.home()))
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return base / "autoclicker" / "config.json"
+
+
+# ── Window icon ────────────────────────────────────────────────────────
+def _make_icon() -> QIcon:
+    """Load icon from bundled icon.png, fall back to plain square."""
+    try:
+        p = _BASE_DIR / "icon.png"
+        if p.exists():
+            return QIcon(str(p))
+    except Exception:
+        pass
+    px = QPixmap(64, 64)
+    px.fill(QColor(46, 46, 46))
+    return QIcon(px)
+
+
+# ── Colored button ─────────────────────────────────────────────────────
+def _colored_btn(text: str, colors: tuple[str, str], bold: bool = True,
+                 text_color: str = "white") -> QPushButton:
+    """Create a QPushButton with custom background color (normal, hover)."""
+    btn = QPushButton(text)
+    weight = "bold" if bold else "normal"
+    btn.setStyleSheet(
+        f"QPushButton {{ background-color: {colors[0]}; color: {text_color}; font-weight: {weight}; }}"
+        f"QPushButton:hover {{ background-color: {colors[1]}; }}"
+    )
+    return btn
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Main Window
+# ═══════════════════════════════════════════════════════════════════════
+
+class AppWindow(QMainWindow):
 
     def __init__(self):
-        self.window = tk.Tk()
-        self.window.title("AutoClicker")
-        self.window.geometry("540x820")
-        self.window.minsize(480, 500)
+        super().__init__()
+        self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(_make_icon())
+        self.resize(*WINDOW_SIZE)
+        self.widgets: dict[str, QWidget] = {}
+        self._loading = False
 
-        # Theme state
-        self.dark_mode = True
-        self.style = ttk.Style()
-        self.style.theme_use('clam')
+        # ── Business logic state ───────────────────────────────────
+        self._init_state()
+
+        # ── Build UI ───────────────────────────────────────────────
+        central = QWidget()
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self._tabs = QTabWidget()
+        self._build_groups()
+        self._build_tabs()
+
+        # Spacer tab
+        self._tabs.addTab(QWidget(), "")
+        spacer_idx = self._tabs.count() - 1
+        self._tabs.setTabEnabled(spacer_idx, False)
+        self._tabs.tabBar().setTabButton(
+            spacer_idx, self._tabs.tabBar().ButtonPosition.LeftSide, None)
+        self._tabs.tabBar().setTabButton(
+            spacer_idx, self._tabs.tabBar().ButtonPosition.RightSide, None)
+
+        self._build_settings_tab()
+        self._build_help_tab()
+
+        outer.addWidget(self._tabs)
+        self.setCentralWidget(central)
+
+        # Load config + apply theme
+        self._load_config()
         self._apply_theme()
 
-        # Load bundled assets (PyInstaller: sys._MEIPASS; dev: script dir)
-        base_dir = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
+        # Start global hotkey listener
+        self._start_keyboard_listener()
 
-        # Set window icon
-        try:
-            if sys.platform == 'win32':
-                ico_path = base_dir / 'icon.ico'
-                if ico_path.exists():
-                    self.window.iconbitmap(str(ico_path))
-            else:
-                png_path = base_dir / 'icon.png'
-                if png_path.exists():
-                    self._window_icon = tk.PhotoImage(file=str(png_path))
-                    self.window.iconphoto(True, self._window_icon)
-        except Exception:
-            pass
+        # Auto-check updates
+        if self._auto_check_updates:
+            QTimer.singleShot(2000, lambda: threading.Thread(
+                target=self._check_for_updates, args=(True,), daemon=True
+            ).start())
 
-        # Load takodachi image for About dialog
-        self._about_image = None
-        try:
-            img_path = base_dir / "takodachi.png"
-            if img_path.exists():
-                self._about_image = tk.PhotoImage(file=str(img_path))
-        except Exception:
-            pass
+    # ══════════════════════════════════════════════════════════════
+    #  State initialisation
+    # ══════════════════════════════════════════════════════════════
 
-        # Config file path
-        if sys.platform == 'win32':
-            appdata = os.environ.get('APPDATA', str(Path.home()))
-            self.config_path = Path(appdata) / "autoclicker" / "config.json"
-        else:
-            self.config_path = Path.home() / ".config" / "autoclicker" / "config.json"
-
-        # Thread locks for thread-safe state access
-        self.clicker1_lock = threading.Lock()
-        self.clicker2_lock = threading.Lock()
-        self.keypresser_lock = threading.Lock()
+    def _init_state(self):
+        # Locks
+        self.clicker1_lock       = threading.Lock()
+        self.clicker2_lock       = threading.Lock()
+        self.keypresser_lock     = threading.Lock()
         self.hotkey_capture_lock = threading.Lock()
+        self.hotkey_timing_lock  = threading.Lock()
 
-        # Clicker 1 state (defaults)
-        self.clicker1_hotkey = Key.f6
+        # Clicker 1
+        self.clicker1_hotkey         = Key.f6
         self.clicker1_hotkey_display = "F6"
-        self.clicker1_interval = DEFAULT_CLICKER1_INTERVAL
-        self.clicker1_clicking = False
-        self.clicker1_thread = None
+        self.clicker1_interval       = DEFAULT_CLICKER1_INTERVAL
+        self.clicker1_clicking       = False
+        self.clicker1_thread         = None
 
-        # Clicker 2 state (defaults)
-        self.clicker2_hotkey = Key.f7
+        # Clicker 2
+        self.clicker2_hotkey         = Key.f7
         self.clicker2_hotkey_display = "F7"
-        self.clicker2_interval = DEFAULT_CLICKER2_INTERVAL
-        self.clicker2_clicking = False
-        self.clicker2_thread = None
+        self.clicker2_interval       = DEFAULT_CLICKER2_INTERVAL
+        self.clicker2_clicking       = False
+        self.clicker2_thread         = None
 
-        # Keyboard Key Presser state (defaults)
-        self.keypresser_hotkey = Key.f8
-        self.keypresser_hotkey_display = "F8"
-        self.keypresser_interval = DEFAULT_KEYPRESSER_INTERVAL
-        self.keypresser_target_key = Key.space  # Default to spacebar
-        self.keypresser_target_key_display = "Space"
-        self.keypresser_pressing = False
-        self.keypresser_thread = None
+        # Key Presser
+        self.keypresser_hotkey              = Key.f8
+        self.keypresser_hotkey_display      = "F8"
+        self.keypresser_interval            = DEFAULT_KEYPRESSER_INTERVAL
+        self.keypresser_target_key          = Key.space
+        self.keypresser_target_key_display  = "Space"
+        self.keypresser_pressing            = False
+        self.keypresser_thread              = None
 
-        # Emergency Stop hotkey (defaults)
-        self.emergency_stop_hotkey = Key.f9
+        # Emergency Stop
+        self.emergency_stop_hotkey         = Key.f9
         self.emergency_stop_hotkey_display = "F9"
 
-        # Shared state
-        self.mouse_controller = mouse.Controller()  # pynput mouse controller
-        self.keyboard_controller = keyboard.Controller()  # pynput keyboard controller
-        self.keyboard_listener = None
+        # Shared
+        self.mouse_controller    = mouse.Controller()
+        self.keyboard_controller = keyboard.Controller()
+        self.keyboard_listener   = None
         self.hotkey_capture_listener = None
-        self.listening_for_hotkey = False
-        self.hotkey_target = None  # "clicker1", "clicker2", "keypresser", or "emergency_stop"
+        self.listening_for_hotkey    = False
+        self.hotkey_target           = None
+        self.last_hotkey_time        = {}
+        self.hotkey_cooldown         = 0.2
 
-        # Rate limiting for hotkey presses (thread-safe)
-        self.last_hotkey_time = {}
-        self.hotkey_timing_lock = threading.Lock()
-        self.hotkey_cooldown = 0.2  # 200ms cooldown between hotkey presses
+        # Settings
+        self._auto_check_updates = True
 
-        # Update settings
-        self.auto_check_updates = True  # Default: check for updates on startup
+    # ══════════════════════════════════════════════════════════════
+    #  UI builders
+    # ══════════════════════════════════════════════════════════════
 
-        # UI elements
-        self.interval1_var = None
-        self.interval2_var = None
-        self.hotkey1_button = None
-        self.hotkey2_button = None
-        self.status1_var = None
-        self.status2_var = None
-        self.keypresser_interval_var = None
-        self.keypresser_hotkey_button = None
-        self.keypresser_target_key_button = None
-        self.keypresser_status_var = None
-        self.emergency_stop_button = None
+    def _build_groups(self):
+        self._clicker1_group  = self._build_clicker_group(1)
+        self._clicker2_group  = self._build_clicker_group(2)
+        self._keypresser_group = self._build_keypresser_group()
 
-        # Load saved configuration
-        self.load_config()
+    def _build_clicker_group(self, n: int) -> QGroupBox:
+        default_interval = DEFAULT_CLICKER1_INTERVAL if n == 1 else DEFAULT_CLICKER2_INTERVAL
+        default_hotkey   = "F6" if n == 1 else "F7"
 
-        self.setup_ui()
-        self.start_keyboard_listener()
+        # Interval row
+        interval_row = QHBoxLayout()
+        interval_row.addWidget(QLabel("Interval (seconds):"))
+        interval_row.addStretch()
+        spin = QDoubleSpinBox()
+        spin.setRange(MIN_INTERVAL, MAX_INTERVAL)
+        spin.setDecimals(2)
+        spin.setSingleStep(0.1)
+        spin.setFixedWidth(90)
+        spin.setValue(default_interval)
+        spin.valueChanged.connect(lambda v, _n=n: self._on_clicker_interval_changed(_n, v))
+        setattr(self, f"_clicker{n}_spin", spin)
+        interval_row.addWidget(spin)
 
-        self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
+        # Hotkey row
+        hotkey_row = QHBoxLayout()
+        hotkey_row.addWidget(QLabel("Toggle Hotkey:"))
+        hotkey_row.addStretch()
+        hbtn = QPushButton(f"Current: {default_hotkey}")
+        hbtn.setFixedWidth(140)
+        hbtn.clicked.connect(lambda _=False, _n=n: self._start_hotkey_capture(f"clicker{_n}"))
+        setattr(self, f"_clicker{n}_hotkey_btn", hbtn)
+        hotkey_row.addWidget(hbtn)
 
-        # Check for updates on startup (delay to let UI initialize)
-        if self.auto_check_updates:
-            self.window.after(2000, lambda: threading.Thread(
-                target=self._check_for_updates, args=(True,), daemon=True).start())
+        # Status row
+        status_row = QHBoxLayout()
+        status_row.addWidget(QLabel("Status:"))
+        status_row.addStretch()
+        slbl = QLabel("Idle")
+        slbl.setStyleSheet(f"color: {STATUS_IDLE}; font-weight: bold;")
+        setattr(self, f"_clicker{n}_status_lbl", slbl)
+        status_row.addWidget(slbl)
+
+        note = self._label_row(
+            "Left-clicks at the configured interval. "
+            "Clicker 1 and 2 are mutually exclusive — starting one stops the other."
+        )
+        return self._group(f"Clicker {n}", [interval_row, hotkey_row, status_row, note])
+
+    def _build_keypresser_group(self) -> QGroupBox:
+        # Target key row
+        target_row = QHBoxLayout()
+        target_row.addWidget(QLabel("Key to Press:"))
+        target_row.addStretch()
+        self._target_key_btn = QPushButton(
+            f"Current: {self.keypresser_target_key_display}")
+        self._target_key_btn.setFixedWidth(140)
+        self._target_key_btn.clicked.connect(self._start_target_key_capture)
+        target_row.addWidget(self._target_key_btn)
+
+        # Interval row
+        interval_row = QHBoxLayout()
+        interval_row.addWidget(QLabel("Interval (seconds):"))
+        interval_row.addStretch()
+        spin = QDoubleSpinBox()
+        spin.setRange(MIN_INTERVAL, MAX_INTERVAL)
+        spin.setDecimals(2)
+        spin.setSingleStep(0.1)
+        spin.setFixedWidth(90)
+        spin.setValue(DEFAULT_KEYPRESSER_INTERVAL)
+        spin.valueChanged.connect(self._on_keypresser_interval_changed)
+        self._keypresser_spin = spin
+        interval_row.addWidget(spin)
+
+        # Hotkey row
+        hotkey_row = QHBoxLayout()
+        hotkey_row.addWidget(QLabel("Toggle Hotkey:"))
+        hotkey_row.addStretch()
+        self._keypresser_hotkey_btn = QPushButton(
+            f"Current: {self.keypresser_hotkey_display}")
+        self._keypresser_hotkey_btn.setFixedWidth(140)
+        self._keypresser_hotkey_btn.clicked.connect(
+            lambda: self._start_hotkey_capture("keypresser"))
+        hotkey_row.addWidget(self._keypresser_hotkey_btn)
+
+        # Status row
+        status_row = QHBoxLayout()
+        status_row.addWidget(QLabel("Status:"))
+        status_row.addStretch()
+        self._keypresser_status_lbl = QLabel("Idle")
+        self._keypresser_status_lbl.setStyleSheet(
+            f"color: {STATUS_IDLE}; font-weight: bold;")
+        status_row.addWidget(self._keypresser_status_lbl)
+
+        note = self._label_row(
+            "Repeatedly presses the selected key at the configured interval."
+        )
+        return self._group("Key Presser",
+                           [target_row, interval_row, hotkey_row, status_row, note])
+
+    def _build_tabs(self):
+        self._add_tab("Clicker 1",  [self._clicker1_group])
+        self._add_tab("Clicker 2",  [self._clicker2_group])
+        self._add_tab("Key Presser", [self._keypresser_group])
+
+    def _build_settings_tab(self):
+        page   = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        subtitle = QLabel("github.com/jj-repository/autoclicker")
+        subtitle.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(subtitle)
+        layout.addSpacing(10)
+
+        # Action buttons
+        btns = QHBoxLayout()
+        chk_btn = _colored_btn("Check for Updates", BLUE)
+        chk_btn.clicked.connect(lambda: threading.Thread(
+            target=self._check_for_updates, args=(False,), daemon=True).start())
+        btns.addWidget(chk_btn)
+        bug_btn = _colored_btn("Report Bug", YELLOW, text_color="#1e1e1e")
+        bug_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(
+            "https://github.com/jj-repository/autoclicker/issues/new?template=bug_report.yml"
+        )))
+        btns.addWidget(bug_btn)
+        btns.addStretch()
+        layout.addLayout(btns)
+        layout.addSpacing(12)
+
+        # Emergency Stop group
+        emerg_hotkey_row = QHBoxLayout()
+        emerg_hotkey_row.addWidget(QLabel("Hotkey:"))
+        emerg_hotkey_row.addStretch()
+        self._emergency_hotkey_btn = QPushButton(
+            f"Current: {self.emergency_stop_hotkey_display}")
+        self._emergency_hotkey_btn.setFixedWidth(140)
+        self._emergency_hotkey_btn.clicked.connect(
+            lambda: self._start_hotkey_capture("emergency_stop"))
+        emerg_hotkey_row.addWidget(self._emergency_hotkey_btn)
+        emerg_note = self._label_row(
+            "Stops all clickers and key presser immediately.")
+        emerg_group = self._group("Emergency Stop",
+                                  [emerg_hotkey_row, emerg_note])
+        layout.addWidget(emerg_group)
+        layout.addSpacing(10)
+
+        # Auto-check updates
+        self._auto_check_cb = QCheckBox("Check for updates on startup")
+        self._auto_check_cb.setChecked(self._auto_check_updates)
+        self._auto_check_cb.stateChanged.connect(self._on_settings_changed)
+        layout.addWidget(self._auto_check_cb)
+        layout.addSpacing(6)
+
+        # Dark mode
+        self._dark_mode_cb = QCheckBox("Dark Mode")
+        self._dark_mode_cb.setChecked(True)
+        self._dark_mode_cb.stateChanged.connect(self._on_settings_changed)
+        layout.addWidget(self._dark_mode_cb)
+        layout.addSpacing(12)
+
+        # Mascot
+        tako_data = base64.b64decode(_TAKO_B64)
+        tako_pix  = QPixmap()
+        tako_pix.loadFromData(tako_data)
+        tako_pix = tako_pix.scaled(
+            120, 120,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        tako_lbl = QLabel()
+        tako_lbl.setPixmap(tako_pix)
+        tako_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(tako_lbl)
+        by_lbl = QLabel("by JJ")
+        by_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        by_lbl.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(by_lbl)
+
+        layout.addStretch()
+        self._tabs.addTab(self._scroll_tab(page), "Settings")
+
+    def _build_help_tab(self):
+        page   = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        title = QLabel(f"{APP_NAME} Help")
+        title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        layout.addWidget(title)
+        layout.addSpacing(8)
+
+        btns = QHBoxLayout()
+        readme_btn = _colored_btn("Readme", BLUE)
+        readme_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(
+            "https://github.com/jj-repository/autoclicker#readme")))
+        btns.addWidget(readme_btn)
+        bug_btn = _colored_btn("Report Bug", YELLOW, text_color="#1e1e1e")
+        bug_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(
+            "https://github.com/jj-repository/autoclicker/issues/new?template=bug_report.yml"
+        )))
+        btns.addWidget(bug_btn)
+        btns.addStretch()
+        layout.addLayout(btns)
+        layout.addSpacing(10)
+
+        sep = QLabel()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background-color: #444;")
+        layout.addWidget(sep)
+        layout.addSpacing(8)
+
+        help_sections = [
+            ("Getting Started",
+             "Assign an interval and hotkey to each clicker or the key presser. "
+             "Press the hotkey at any time to start or stop — even while another app is focused."),
+            ("Clicker 1 & Clicker 2",
+             "Each clicker left-clicks at the configured interval. They are mutually "
+             "exclusive — starting one automatically stops the other."),
+            ("Key Presser",
+             "Picks a keyboard key and presses it repeatedly at the set interval. "
+             "Runs independently from the mouse clickers."),
+            ("Emergency Stop",
+             "Stops everything at once. Configure its hotkey in Settings (default F9)."),
+            ("Settings",
+             "Toggle dark mode, auto-update checking, and configure the emergency stop hotkey."),
+        ]
+        for sec_title, sec_desc in help_sections:
+            t = QLabel(sec_title)
+            t.setStyleSheet("font-size: 13px; font-weight: bold;")
+            layout.addWidget(t)
+            d = QLabel(sec_desc)
+            d.setWordWrap(True)
+            d.setStyleSheet("color: gray; font-size: 11px; margin-left: 8px;")
+            layout.addWidget(d)
+            layout.addSpacing(6)
+
+        layout.addStretch()
+        self._tabs.addTab(self._scroll_tab(page), "Help")
+
+    # ══════════════════════════════════════════════════════════════
+    #  Widget builder helpers (template pattern)
+    # ══════════════════════════════════════════════════════════════
+
+    def _scroll_tab(self, page: QWidget) -> QScrollArea:
+        sa = QScrollArea()
+        sa.setWidget(page)
+        sa.setWidgetResizable(True)
+        sa.setFrameShape(QScrollArea.Shape.NoFrame)
+        return sa
+
+    def _add_tab(self, name: str, groups: list):
+        page   = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        for g in groups:
+            layout.addWidget(g)
+        layout.addStretch()
+        self._tabs.addTab(self._scroll_tab(page), name)
+
+    def _group(self, title: str, rows: list, tooltip: str = "") -> QGroupBox:
+        box  = QGroupBox(title)
+        vbox = QVBoxLayout()
+        for row in rows:
+            if isinstance(row, QHBoxLayout):
+                vbox.addLayout(row)
+            elif isinstance(row, QWidget):
+                vbox.addWidget(row)
+        box.setLayout(vbox)
+        if tooltip:
+            box.setTitle(f"{title}  \u24d8")
+            box.setToolTip(tooltip)
+        return box
+
+    def _label_row(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet("color: gray; font-size: 11px;")
+        lbl.setWordWrap(True)
+        return lbl
+
+    # ══════════════════════════════════════════════════════════════
+    #  Theme
+    # ══════════════════════════════════════════════════════════════
 
     def _apply_theme(self):
-        """Apply current theme to all widgets."""
-        t = self._t
-        self.window.configure(bg=t['bg'])
-        self.style.configure('.', background=t['bg'], foreground=t['fg'],
-                             fieldbackground=t['entry_bg'], borderwidth=0)
-        self.style.configure('TFrame', background=t['bg'])
-        self.style.configure('TLabel', background=t['bg'], foreground=t['fg'])
-        self.style.configure('TButton', background=t['button_bg'], foreground=t['fg'], padding=(8, 4))
-        self.style.map('TButton', background=[('active', t['accent'])])
-        self.style.configure('TEntry', fieldbackground=t['entry_bg'], foreground=t['entry_fg'])
-        self.style.configure('TCheckbutton', background=t['bg'], foreground=t['fg'])
-        self.style.configure('TSeparator', background=t['sep'])
+        if hasattr(self, "_dark_mode_cb") and self._dark_mode_cb.isChecked():
+            if not hasattr(self, "_dark_style_cache"):
+                self._dark_style_cache = _build_dark_style()
+            QApplication.instance().setStyleSheet(self._dark_style_cache)
+        else:
+            QApplication.instance().setStyleSheet(_LIGHT_STYLE)
 
-        # Update tk.Label status widgets if they exist
-        for label_attr, is_active_attr in [
-            ('status1_label', 'clicker1_clicking'),
-            ('status2_label', 'clicker2_clicking'),
-            ('keypresser_status_label', 'keypresser_pressing'),
-        ]:
-            label = getattr(self, label_attr, None)
-            if label:
-                active = getattr(self, is_active_attr, False)
-                label.config(bg=t['bg'], fg=t['red'] if active else t['green'])
-
-    def _toggle_theme(self):
-        """Toggle between dark and light mode."""
-        self.dark_mode = not self.dark_mode
+    def _on_settings_changed(self, _=None):
+        if self._loading:
+            return
+        if hasattr(self, "_auto_check_cb"):
+            self._auto_check_updates = self._auto_check_cb.isChecked()
         self._apply_theme()
+        self._save_config()
 
-    def _safe_after(self, delay_ms, callback):
-        """
-        Safely schedule a callback on the main thread.
-        Prevents crashes if window is destroyed before callback runs.
-        """
-        try:
-            if self.window and self.window.winfo_exists():
-                self.window.after(delay_ms, callback)
-        except tk.TclError:
-            # Window was destroyed, ignore the callback
-            pass
+    # ══════════════════════════════════════════════════════════════
+    #  Config load / save
+    # ══════════════════════════════════════════════════════════════
 
-    def _validate_interval(self, interval, default):
-        """Validate interval is within acceptable bounds"""
+    def _validate_interval(self, value, default):
         try:
-            interval_float = float(interval)
-            if MIN_INTERVAL <= interval_float <= MAX_INTERVAL:
-                return interval_float
+            v = float(value)
+            if MIN_INTERVAL <= v <= MAX_INTERVAL:
+                return v
         except (ValueError, TypeError):
             pass
         return default
 
-    def load_config(self):
-        """Load saved configuration from JSON file"""
-        if not self.config_path.exists():
+    def _load_config(self):
+        path = _config_path()
+        if not path.exists():
+            return
+        try:
+            with open(path) as f:
+                cfg = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Error loading config: {e}")
             return
 
+        self._loading = True
         try:
-            with open(self.config_path, 'r') as f:
-                config = json.load(f)
-
-            # Load and validate intervals
             self.clicker1_interval = self._validate_interval(
-                config.get('clicker1_interval', self.clicker1_interval),
-                DEFAULT_CLICKER1_INTERVAL
-            )
+                cfg.get("clicker1_interval"), DEFAULT_CLICKER1_INTERVAL)
             self.clicker2_interval = self._validate_interval(
-                config.get('clicker2_interval', self.clicker2_interval),
-                DEFAULT_CLICKER2_INTERVAL
-            )
-
-            # Load hotkeys with type validation
-            if 'clicker1_hotkey' in config:
-                self.clicker1_hotkey = self._deserialize_key(config['clicker1_hotkey'])
-                display = config.get('clicker1_hotkey_display', 'F6')
-                self.clicker1_hotkey_display = display if isinstance(display, str) else 'F6'
-
-            if 'clicker2_hotkey' in config:
-                self.clicker2_hotkey = self._deserialize_key(config['clicker2_hotkey'])
-                display = config.get('clicker2_hotkey_display', 'F7')
-                self.clicker2_hotkey_display = display if isinstance(display, str) else 'F7'
-
-            # Load keypresser settings
+                cfg.get("clicker2_interval"), DEFAULT_CLICKER2_INTERVAL)
             self.keypresser_interval = self._validate_interval(
-                config.get('keypresser_interval', self.keypresser_interval),
-                DEFAULT_KEYPRESSER_INTERVAL
-            )
+                cfg.get("keypresser_interval"), DEFAULT_KEYPRESSER_INTERVAL)
 
-            if 'keypresser_hotkey' in config:
-                self.keypresser_hotkey = self._deserialize_key(config['keypresser_hotkey'])
-                self.keypresser_hotkey_display = config.get('keypresser_hotkey_display', 'F8')
+            if "clicker1_hotkey" in cfg:
+                self.clicker1_hotkey = self._deserialize_key(cfg["clicker1_hotkey"])
+                d = cfg.get("clicker1_hotkey_display", "F6")
+                self.clicker1_hotkey_display = d if isinstance(d, str) else "F6"
 
-            if 'keypresser_target_key_pynput' in config:
-                self.keypresser_target_key = self._deserialize_key(config['keypresser_target_key_pynput'])
-                self.keypresser_target_key_display = config.get('keypresser_target_key_display', 'Space')
+            if "clicker2_hotkey" in cfg:
+                self.clicker2_hotkey = self._deserialize_key(cfg["clicker2_hotkey"])
+                d = cfg.get("clicker2_hotkey_display", "F7")
+                self.clicker2_hotkey_display = d if isinstance(d, str) else "F7"
 
-            # Load emergency stop hotkey
-            if 'emergency_stop_hotkey' in config:
-                self.emergency_stop_hotkey = self._deserialize_key(config['emergency_stop_hotkey'])
-                self.emergency_stop_hotkey_display = config.get('emergency_stop_hotkey_display', 'F9')
+            if "keypresser_hotkey" in cfg:
+                self.keypresser_hotkey = self._deserialize_key(cfg["keypresser_hotkey"])
+                self.keypresser_hotkey_display = cfg.get("keypresser_hotkey_display", "F8")
 
-            # Load auto update setting
-            if 'auto_check_updates' in config:
-                self.auto_check_updates = bool(config.get('auto_check_updates', True))
+            if "keypresser_target_key_pynput" in cfg:
+                self.keypresser_target_key = self._deserialize_key(
+                    cfg["keypresser_target_key_pynput"])
+                self.keypresser_target_key_display = cfg.get(
+                    "keypresser_target_key_display", "Space")
+
+            if "emergency_stop_hotkey" in cfg:
+                self.emergency_stop_hotkey = self._deserialize_key(
+                    cfg["emergency_stop_hotkey"])
+                self.emergency_stop_hotkey_display = cfg.get(
+                    "emergency_stop_hotkey_display", "F9")
+
+            if "auto_check_updates" in cfg:
+                self._auto_check_updates = bool(cfg["auto_check_updates"])
+
+            # Update widgets
+            self._clicker1_spin.setValue(self.clicker1_interval)
+            self._clicker2_spin.setValue(self.clicker2_interval)
+            self._keypresser_spin.setValue(self.keypresser_interval)
+            self._clicker1_hotkey_btn.setText(f"Current: {self.clicker1_hotkey_display}")
+            self._clicker2_hotkey_btn.setText(f"Current: {self.clicker2_hotkey_display}")
+            self._keypresser_hotkey_btn.setText(f"Current: {self.keypresser_hotkey_display}")
+            self._target_key_btn.setText(f"Current: {self.keypresser_target_key_display}")
+            self._emergency_hotkey_btn.setText(
+                f"Current: {self.emergency_stop_hotkey_display}")
+            self._auto_check_cb.setChecked(self._auto_check_updates)
+            dark = bool(cfg.get("dark_mode", True))
+            self._dark_mode_cb.setChecked(dark)
 
             # Restore window geometry
-            if 'window_geometry' in config:
+            geom_hex = cfg.get("window_geometry", "")
+            if geom_hex:
                 try:
-                    self.window.geometry(config['window_geometry'])
+                    self.restoreGeometry(QByteArray.fromHex(geom_hex.encode()))
                 except Exception:
                     pass
+        finally:
+            self._loading = False
 
-        except json.JSONDecodeError as e:
-            print(f"Error: Config file is corrupted: {e}")
-        except (IOError, OSError) as e:
-            print(f"Error: Cannot read config file: {e}")
-        except Exception as e:
-            print(f"Error loading config: {e}")
+    def _save_config(self):
+        if self._loading:
+            return
+        path = _config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-    def save_config(self):
-        """Save current configuration to JSON file, merging with existing
-        settings so that keys written by the evdev version are preserved."""
+        # Load existing to preserve keys from the evdev version
+        existing: dict = {}
+        if path.exists():
+            try:
+                with open(path) as f:
+                    existing = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        dark = self._dark_mode_cb.isChecked() if hasattr(self, "_dark_mode_cb") else True
+        cfg = {
+            "clicker1_interval":          self.clicker1_interval,
+            "clicker2_interval":          self.clicker2_interval,
+            "clicker1_hotkey":            self._serialize_key(self.clicker1_hotkey),
+            "clicker1_hotkey_display":    self.clicker1_hotkey_display,
+            "clicker2_hotkey":            self._serialize_key(self.clicker2_hotkey),
+            "clicker2_hotkey_display":    self.clicker2_hotkey_display,
+            "keypresser_interval":        self.keypresser_interval,
+            "keypresser_hotkey":          self._serialize_key(self.keypresser_hotkey),
+            "keypresser_hotkey_display":  self.keypresser_hotkey_display,
+            "keypresser_target_key_pynput":   self._serialize_key(self.keypresser_target_key),
+            "keypresser_target_key_display":  self.keypresser_target_key_display,
+            "emergency_stop_hotkey":          self._serialize_key(self.emergency_stop_hotkey),
+            "emergency_stop_hotkey_display":  self.emergency_stop_hotkey_display,
+            "auto_check_updates": self._auto_check_updates,
+            "dark_mode":          dark,
+            "window_geometry":    self.saveGeometry().toHex().data().decode(),
+        }
+        existing.update(cfg)
         try:
-            # Create config directory if it doesn't exist
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Load existing config first to preserve keys from the other version
-            existing_config = {}
-            if self.config_path.exists():
-                try:
-                    with open(self.config_path, 'r') as f:
-                        existing_config = json.load(f)
-                except (json.JSONDecodeError, IOError, OSError):
-                    existing_config = {}
-
-            config = {
-                'clicker1_interval': self.clicker1_interval,
-                'clicker2_interval': self.clicker2_interval,
-                'clicker1_hotkey': self._serialize_key(self.clicker1_hotkey),
-                'clicker1_hotkey_display': self.clicker1_hotkey_display,
-                'clicker2_hotkey': self._serialize_key(self.clicker2_hotkey),
-                'clicker2_hotkey_display': self.clicker2_hotkey_display,
-                'keypresser_interval': self.keypresser_interval,
-                'keypresser_hotkey': self._serialize_key(self.keypresser_hotkey),
-                'keypresser_hotkey_display': self.keypresser_hotkey_display,
-                'keypresser_target_key_pynput': self._serialize_key(self.keypresser_target_key),
-                'keypresser_target_key_display': self.keypresser_target_key_display,
-                'emergency_stop_hotkey': self._serialize_key(self.emergency_stop_hotkey),
-                'emergency_stop_hotkey_display': self.emergency_stop_hotkey_display,
-                'auto_check_updates': self.auto_check_updates,
-                'window_geometry': self.window.geometry(),
-            }
-
-            # Merge: existing values first, then overwrite with our values
-            existing_config.update(config)
-
-            with open(self.config_path, 'w') as f:
-                json.dump(existing_config, f, indent=2)
-
-        except Exception as e:
+            with open(path, "w") as f:
+                json.dump(existing, f, indent=2)
+        except OSError as e:
             print(f"Error saving config: {e}")
 
+    # ══════════════════════════════════════════════════════════════
+    #  Key serialization (unchanged — JSON format backward compat)
+    # ══════════════════════════════════════════════════════════════
+
     def _serialize_key(self, key):
-        """Convert a pynput key to a JSON-serializable format"""
-        if hasattr(key, 'name'):
-            return {'type': 'special', 'name': key.name}
-        elif hasattr(key, 'char'):
-            return {'type': 'char', 'char': key.char}
-        else:
-            return {'type': 'special', 'name': 'f6'}  # fallback
+        if hasattr(key, "name"):
+            return {"type": "special", "name": key.name}
+        elif hasattr(key, "char"):
+            return {"type": "char", "char": key.char}
+        return {"type": "special", "name": "f6"}
 
     def _deserialize_key(self, key_data):
-        """Convert JSON data back to a pynput key"""
-        # Validate that key_data is a dict with expected structure
         if not isinstance(key_data, dict):
-            print(f"Warning: Invalid hotkey data type, expected dict, got {type(key_data).__name__}")
             return Key.f6
-
-        key_type = key_data.get('type', 'special')
+        key_type = key_data.get("type", "special")
         if not isinstance(key_type, str):
             return Key.f6
-
-        if key_type == 'special':
-            # Get the Key attribute by name
-            name = key_data.get('name', 'f6')
+        if key_type == "special":
+            name = key_data.get("name", "f6")
             if not isinstance(name, str):
                 return Key.f6
             return getattr(Key, name, Key.f6)
-        elif key_type == 'char':
-            char = key_data.get('char')
+        elif key_type == "char":
+            char = key_data.get("char")
             if char and isinstance(char, str) and len(char) == 1:
                 try:
                     return KeyCode.from_char(char)
                 except Exception:
-                    return Key.f6  # fallback if KeyCode creation fails
-            return Key.f6  # fallback if char is missing or invalid
-        else:
-            return Key.f6  # fallback
+                    return Key.f6
+            return Key.f6
+        return Key.f6
 
-    def setup_ui(self):
-        # Create menu bar
-        menubar = tk.Menu(self.window)
-        self.window.config(menu=menubar)
+    # ══════════════════════════════════════════════════════════════
+    #  Interval change handlers
+    # ══════════════════════════════════════════════════════════════
 
-        help_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Help", menu=help_menu)
-        help_menu.add_command(label="Check for Updates", command=self._check_for_updates_clicked)
-
-        # Auto-check updates toggle
-        self.auto_check_var = tk.BooleanVar(value=self.auto_check_updates)
-        help_menu.add_checkbutton(
-            label="Check for Updates on Startup",
-            variable=self.auto_check_var,
-            command=self._toggle_auto_check_updates
-        )
-        help_menu.add_separator()
-        help_menu.add_command(label="Toggle Dark/Light Mode", command=self._toggle_theme)
-        help_menu.add_separator()
-        help_menu.add_command(label="About", command=self._show_about)
-
-        main_frame = ttk.Frame(self.window, padding="20")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-
-        # Title
-        title_label = ttk.Label(main_frame, text="Dual AutoClicker", font=("Arial", 18, "bold"))
-        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
-
-        # Separator
-        separator = ttk.Separator(main_frame, orient='vertical')
-        separator.grid(row=1, column=1, rowspan=6, sticky='ns', padx=20)
-
-        # ----- CLICKER 1 -----
-        self._setup_clicker1_ui(main_frame, 0, 1)
-
-        # ----- CLICKER 2 -----
-        self._setup_clicker2_ui(main_frame, 2, 1)
-
-        # ----- EMERGENCY STOP (always visible) -----
-        hsep_emerg = ttk.Separator(main_frame, orient='horizontal')
-        hsep_emerg.grid(row=8, column=0, columnspan=3, sticky='ew', pady=(20, 10))
-
-        emergency_title = ttk.Label(main_frame, text="Emergency Stop All", font=("Arial", 11, "bold"), foreground="red")
-        emergency_title.grid(row=9, column=0, columnspan=3)
-
-        emerg_row = ttk.Frame(main_frame)
-        emerg_row.grid(row=10, column=0, columnspan=3, pady=(5, 0))
-
-        ttk.Label(emerg_row, text="Hotkey:").pack(side=tk.LEFT, padx=(0, 5))
-        self.emergency_stop_button = ttk.Button(
-            emerg_row,
-            text=f"Current: {self.emergency_stop_hotkey_display}",
-            command=lambda: self.start_hotkey_capture("emergency_stop"),
-            width=15
-        )
-        self.emergency_stop_button.pack(side=tk.LEFT)
-
-        # ----- KEYBOARD KEY PRESSER -----
-        hseparator = ttk.Separator(main_frame, orient='horizontal')
-        hseparator.grid(row=11, column=0, columnspan=3, sticky='ew', pady=(15, 5))
-
-        keypresser_title = ttk.Label(main_frame, text="Keyboard Key Presser", font=("Arial", 14, "bold"))
-        keypresser_title.grid(row=12, column=0, columnspan=3, pady=(5, 10))
-
-        # Left side: target key + interval
-        target_key_label = ttk.Label(main_frame, text="Key to Press:")
-        target_key_label.grid(row=13, column=0, sticky=tk.W, pady=5)
-
-        self.keypresser_target_key_button = ttk.Button(
-            main_frame,
-            text=f"Current: {self.keypresser_target_key_display}",
-            command=self.select_target_key,
-            width=20
-        )
-        self.keypresser_target_key_button.grid(row=14, column=0, sticky=tk.W, pady=5)
-
-        kp_interval_label = ttk.Label(main_frame, text="Interval (seconds):")
-        kp_interval_label.grid(row=15, column=0, sticky=tk.W, pady=(15, 5))
-
-        self.keypresser_interval_var = tk.StringVar(value=str(self.keypresser_interval))
-        kp_interval_entry = ttk.Entry(main_frame, textvariable=self.keypresser_interval_var, width=20)
-        kp_interval_entry.grid(row=16, column=0, sticky=tk.W, pady=5)
-
-        ttk.Button(
-            main_frame, text="Apply Interval",
-            command=self.apply_keypresser_interval
-        ).grid(row=17, column=0, pady=5)
-
-        # Separator
-        separator2 = ttk.Separator(main_frame, orient='vertical')
-        separator2.grid(row=13, column=1, rowspan=5, sticky='ns', padx=20)
-
-        # Right side: hotkey + status
-        kp_hotkey_label = ttk.Label(main_frame, text="Toggle Hotkey:")
-        kp_hotkey_label.grid(row=13, column=2, sticky=tk.W, pady=5)
-
-        self.keypresser_hotkey_button = ttk.Button(
-            main_frame,
-            text=f"Current: {self.keypresser_hotkey_display}",
-            command=lambda: self.start_hotkey_capture("keypresser"),
-            width=20
-        )
-        self.keypresser_hotkey_button.grid(row=14, column=2, sticky=tk.W, pady=5)
-
-        kp_status_label = ttk.Label(main_frame, text="Status:")
-        kp_status_label.grid(row=15, column=2, sticky=tk.W, pady=(15, 5))
-
-        self.keypresser_status_var = tk.StringVar(value="Idle")
-        self.keypresser_status_label = tk.Label(main_frame, textvariable=self.keypresser_status_var, font=("Arial", 10, "bold"), fg=self._t['green'], bg=self._t['bg'])
-        self.keypresser_status_label.grid(row=16, column=2, pady=5)
-
-        # Instructions at bottom
-        instructions = ttk.Label(
-            main_frame,
-            text="Mouse clickers stop each other when started. Keyboard presser is independent.\nEmergency Stop will stop everything at once.",
-            wraplength=650,
-            justify=tk.CENTER,
-            font=("Arial", 9, "italic")
-        )
-        instructions.grid(row=18, column=0, columnspan=3, pady=(15, 0))
-
-        # (Check for Updates is available via Help menu)
-
-    def _setup_clicker1_ui(self, parent, column, start_row):
-        """Setup UI for Clicker 1"""
-        # Title
-        title = ttk.Label(parent, text="Clicker 1", font=("Arial", 14, "bold"))
-        title.grid(row=start_row, column=column, pady=(0, 15))
-
-        # Interval
-        interval_label = ttk.Label(parent, text="Interval (seconds):")
-        interval_label.grid(row=start_row+1, column=column, sticky=tk.W, pady=5)
-
-        self.interval1_var = tk.StringVar(value=str(self.clicker1_interval))
-        interval_entry = ttk.Entry(parent, textvariable=self.interval1_var, width=20)
-        interval_entry.grid(row=start_row+2, column=column, sticky=tk.W, pady=5)
-
-        # Apply interval button
-        apply_button = ttk.Button(
-            parent,
-            text="Apply Interval",
-            command=self.apply_interval1
-        )
-        apply_button.grid(row=start_row+3, column=column, pady=5)
-
-        # Hotkey
-        hotkey_label = ttk.Label(parent, text="Toggle Hotkey:")
-        hotkey_label.grid(row=start_row+4, column=column, sticky=tk.W, pady=(10, 5))
-
-        self.hotkey1_button = ttk.Button(
-            parent,
-            text=f"Current: {self.clicker1_hotkey_display}",
-            command=lambda: self.start_hotkey_capture("clicker1"),
-            width=20
-        )
-        self.hotkey1_button.grid(row=start_row+5, column=column, sticky=tk.W, pady=5)
-
-        # Status
-        self.status1_var = tk.StringVar(value="Idle")
-        self.status1_label = tk.Label(parent, textvariable=self.status1_var, font=("Arial", 10, "bold"), fg=self._t['green'], bg=self._t['bg'])
-        self.status1_label.grid(row=start_row+6, column=column, pady=(10, 5))
-
-    def _setup_clicker2_ui(self, parent, column, start_row):
-        """Setup UI for Clicker 2"""
-        # Title
-        title = ttk.Label(parent, text="Clicker 2", font=("Arial", 14, "bold"))
-        title.grid(row=start_row, column=column, pady=(0, 15))
-
-        # Interval
-        interval_label = ttk.Label(parent, text="Interval (seconds):")
-        interval_label.grid(row=start_row+1, column=column, sticky=tk.W, pady=5)
-
-        self.interval2_var = tk.StringVar(value=str(self.clicker2_interval))
-        interval_entry = ttk.Entry(parent, textvariable=self.interval2_var, width=20)
-        interval_entry.grid(row=start_row+2, column=column, sticky=tk.W, pady=5)
-
-        # Apply interval button
-        apply_button = ttk.Button(
-            parent,
-            text="Apply Interval",
-            command=self.apply_interval2
-        )
-        apply_button.grid(row=start_row+3, column=column, pady=5)
-
-        # Hotkey
-        hotkey_label = ttk.Label(parent, text="Toggle Hotkey:")
-        hotkey_label.grid(row=start_row+4, column=column, sticky=tk.W, pady=(10, 5))
-
-        self.hotkey2_button = ttk.Button(
-            parent,
-            text=f"Current: {self.clicker2_hotkey_display}",
-            command=lambda: self.start_hotkey_capture("clicker2"),
-            width=20
-        )
-        self.hotkey2_button.grid(row=start_row+5, column=column, sticky=tk.W, pady=5)
-
-        # Status
-        self.status2_var = tk.StringVar(value="Idle")
-        self.status2_label = tk.Label(parent, textvariable=self.status2_var, font=("Arial", 10, "bold"), fg=self._t['green'], bg=self._t['bg'])
-        self.status2_label.grid(row=start_row+6, column=column, pady=(10, 5))
-
-    def _apply_interval(self, interval_var, target_attr, name):
-        """Consolidated interval application with validation"""
-        try:
-            interval_value = float(interval_var.get())
-            if interval_value < MIN_INTERVAL:
-                raise ValueError(f"Interval must be at least {MIN_INTERVAL}s (prevents system overload)")
-            if interval_value > MAX_INTERVAL:
-                raise ValueError(f"Interval must be at most {MAX_INTERVAL}s")
-            # Acquire the appropriate lock before modifying interval
-            lock_map = {
-                'clicker1_interval': self.clicker1_lock,
-                'clicker2_interval': self.clicker2_lock,
-                'keypresser_interval': self.keypresser_lock,
-            }
-            lock = lock_map.get(target_attr)
-            if not lock:
-                setattr(self, target_attr, interval_value)
-                self.save_config()
-                messagebox.showinfo("Success", f"{name} interval updated to {interval_value}s")
-                return
-            with lock:
-                setattr(self, target_attr, interval_value)
-            self.save_config()
-            messagebox.showinfo("Success", f"{name} interval updated to {interval_value}s")
-        except ValueError as e:
-            messagebox.showerror("Error", f"Invalid interval: {e}")
-
-    def apply_interval1(self):
-        self._apply_interval(self.interval1_var, 'clicker1_interval', 'Clicker 1')
-
-    def apply_interval2(self):
-        self._apply_interval(self.interval2_var, 'clicker2_interval', 'Clicker 2')
-
-    def apply_keypresser_interval(self):
-        self._apply_interval(self.keypresser_interval_var, 'keypresser_interval', 'Key Presser')
-
-    def select_target_key(self):
-        """Let user select which keyboard key to auto-press"""
-        dialog = tk.Toplevel(self.window)
-        dialog.title("Select Key to Press")
-        dialog.geometry("300x150")
-        dialog.resizable(False, False)
-        dialog.grab_set()
-        dialog.configure(bg=self._t['bg'])
-
-        label = tk.Label(dialog, text="Press any key...", font=("Arial", 12),
-                         bg=self._t['bg'], fg=self._t['fg'])
-        label.pack(pady=40)
-
-        def on_key_press(event):
-            key_name = event.keysym
-            # Convert tkinter keysym to pynput Key/KeyCode
-            pynput_key = self._tk_keysym_to_pynput(key_name)
-            if pynput_key is not None:
-                self.keypresser_target_key = pynput_key
-                self.keypresser_target_key_display = key_name.upper() if len(key_name) == 1 else key_name.capitalize()
-                self.keypresser_target_key_button.config(text=f"Current: {self.keypresser_target_key_display}")
-                self.save_config()
+    def _on_clicker_interval_changed(self, n: int, value: float):
+        lock = self.clicker1_lock if n == 1 else self.clicker2_lock
+        with lock:
+            if n == 1:
+                self.clicker1_interval = value
             else:
-                messagebox.showwarning(
-                    "Unsupported Key",
-                    f"The key '{key_name}' is not supported.\n\n"
-                    "Please choose a standard letter, number, function key, "
-                    "or one of the recognized special keys."
-                )
-            dialog.destroy()
+                self.clicker2_interval = value
+        self._save_config()
 
-        dialog.bind("<Key>", on_key_press)
-        dialog.focus_set()
+    def _on_keypresser_interval_changed(self, value: float):
+        with self.keypresser_lock:
+            self.keypresser_interval = value
+        self._save_config()
 
-    def _tk_keysym_to_pynput(self, keysym):
-        """Convert tkinter keysym to pynput Key or KeyCode."""
-        special_map = {
-            'space': Key.space, 'Return': Key.enter, 'Tab': Key.tab,
-            'Escape': Key.esc, 'BackSpace': Key.backspace, 'Delete': Key.delete,
-            'Up': Key.up, 'Down': Key.down, 'Left': Key.left, 'Right': Key.right,
-            'Home': Key.home, 'End': Key.end,
-            'Page_Up': Key.page_up, 'Page_Down': Key.page_down,
-            'Insert': Key.insert,
-            'Shift_L': Key.shift_l, 'Shift_R': Key.shift_r,
-            'Control_L': Key.ctrl_l, 'Control_R': Key.ctrl_r,
-            'Alt_L': Key.alt_l, 'Alt_R': Key.alt_r,
-        }
+    # ══════════════════════════════════════════════════════════════
+    #  Hotkey capture (pynput-based)
+    # ══════════════════════════════════════════════════════════════
 
-        if keysym in special_map:
-            return special_map[keysym]
-
-        # F keys
-        if keysym.startswith('F') and keysym[1:].isdigit():
-            f_num = int(keysym[1:])
-            if 1 <= f_num <= 12:
-                return getattr(Key, f'f{f_num}', None)
-
-        # Single character (letter or digit)
-        if len(keysym) == 1:
-            try:
-                return KeyCode.from_char(keysym.lower())
-            except Exception:
-                return None
-
-        return None
-
-    def start_hotkey_capture(self, target):
+    def _start_hotkey_capture(self, target: str):
+        """Start capturing next key press for the given target."""
         with self.hotkey_capture_lock:
             if self.listening_for_hotkey:
                 return
-
             self.listening_for_hotkey = True
             self.hotkey_target = target
 
-        if target == "clicker1":
-            self.hotkey1_button.config(text="Press a key...")
-        elif target == "clicker2":
-            self.hotkey2_button.config(text="Press a key...")
-        elif target == "keypresser":
-            self.keypresser_hotkey_button.config(text="Press a key...")
-        else:  # emergency_stop
-            self.emergency_stop_button.config(text="Press a key...")
+        btn = self._hotkey_btn_for(target)
+        if btn:
+            btn.setText("Press a key...")
 
-        # Stop the main keyboard listener temporarily
-        self.stop_keyboard_listener()
+        self._stop_keyboard_listener()
 
-        # Start a temporary listener to capture the hotkey
         with self.hotkey_capture_lock:
-            self.hotkey_capture_listener = keyboard.Listener(on_press=self.capture_hotkey)
+            self.hotkey_capture_listener = keyboard.Listener(
+                on_press=self._capture_hotkey)
             self.hotkey_capture_listener.start()
 
-    def capture_hotkey(self, key):
+    def _capture_hotkey(self, key):
         with self.hotkey_capture_lock:
             if not self.listening_for_hotkey:
                 return
-
             self.hotkey_capture_listener = None
-
             self.listening_for_hotkey = False
             target = self.hotkey_target
 
-        # Set the new hotkey
-        key_display = self.get_key_display_name(key)
+        display = self.get_key_display_name(key)
 
         if target == "clicker1":
-            self.clicker1_hotkey = key
-            self.clicker1_hotkey_display = key_display
-            self._safe_after(0, lambda: self.hotkey1_button.config(text=f"Current: {key_display}"))
+            self.clicker1_hotkey         = key
+            self.clicker1_hotkey_display = display
         elif target == "clicker2":
-            self.clicker2_hotkey = key
-            self.clicker2_hotkey_display = key_display
-            self._safe_after(0, lambda: self.hotkey2_button.config(text=f"Current: {key_display}"))
+            self.clicker2_hotkey         = key
+            self.clicker2_hotkey_display = display
         elif target == "keypresser":
-            self.keypresser_hotkey = key
-            self.keypresser_hotkey_display = key_display
-            self._safe_after(0, lambda: self.keypresser_hotkey_button.config(text=f"Current: {key_display}"))
-        else:  # emergency_stop
-            self.emergency_stop_hotkey = key
-            self.emergency_stop_hotkey_display = key_display
-            self._safe_after(0, lambda: self.emergency_stop_button.config(text=f"Current: {key_display}"))
+            self.keypresser_hotkey         = key
+            self.keypresser_hotkey_display = display
+        elif target == "emergency_stop":
+            self.emergency_stop_hotkey         = key
+            self.emergency_stop_hotkey_display = display
 
-        # Save the new configuration (thread-safe file write)
-        self.save_config()
+        btn = self._hotkey_btn_for(target)
 
-        # Restart the main keyboard listener on main thread safely
-        self._safe_after(0, self.start_keyboard_listener)
+        def _update():
+            if btn:
+                btn.setText(f"Current: {display}")
+            self._save_config()
+            self._start_keyboard_listener()
 
-        # Return False to tell pynput to stop this listener (avoids deadlock
-        # from calling stop() inside the callback)
-        return False
+        QTimer.singleShot(0, _update)
+        return False  # stop pynput listener
+
+    def _hotkey_btn_for(self, target: str):
+        return {
+            "clicker1":       getattr(self, "_clicker1_hotkey_btn", None),
+            "clicker2":       getattr(self, "_clicker2_hotkey_btn", None),
+            "keypresser":     getattr(self, "_keypresser_hotkey_btn", None),
+            "emergency_stop": getattr(self, "_emergency_hotkey_btn", None),
+        }.get(target)
+
+    def _start_target_key_capture(self):
+        """Capture the next key press as the key presser target key."""
+        self._target_key_btn.setText("Press any key...")
+        self._stop_keyboard_listener()
+
+        def on_press(key):
+            display = self.get_key_display_name(key)
+            self.keypresser_target_key         = key
+            self.keypresser_target_key_display = display
+
+            def _update():
+                self._target_key_btn.setText(f"Current: {display}")
+                self._save_config()
+                self._start_keyboard_listener()
+
+            QTimer.singleShot(0, _update)
+            return False
+
+        cap = keyboard.Listener(on_press=on_press)
+        cap.start()
+
+    # ══════════════════════════════════════════════════════════════
+    #  Key display name
+    # ══════════════════════════════════════════════════════════════
+
+    def get_key_display_name(self, key) -> str:
+        if hasattr(key, "name"):
+            name = key.name
+            if name.startswith("f") and name[1:].isdigit():
+                return name.upper()
+            return name.capitalize()
+        elif hasattr(key, "char") and key.char:
+            return key.char.upper()
+        return str(key)
+
+    # ══════════════════════════════════════════════════════════════
+    #  Clicker / keypresser logic (unchanged from tkinter version)
+    # ══════════════════════════════════════════════════════════════
+
+    def _safe_after(self, delay_ms: int, callback):
+        """Schedule callback on Qt main thread from any thread."""
+        QTimer.singleShot(delay_ms, callback)
 
     def perform_click(self):
-        """Perform a single left mouse click using pynput"""
         self.mouse_controller.click(mouse.Button.left, 1)
 
     def perform_keypress(self, target_key):
-        """Perform a single key press using pynput"""
         self.keyboard_controller.press(target_key)
         self.keyboard_controller.release(target_key)
-
-    def get_key_display_name(self, key):
-        # Handle special keys
-        if hasattr(key, 'name'):
-            name = key.name
-            # Format function keys nicely
-            if name.startswith('f') and name[1:].isdigit():
-                return name.upper()
-            # Capitalize first letter for other special keys
-            return name.capitalize()
-        # Handle character keys
-        elif hasattr(key, 'char') and key.char:
-            return key.char.upper()
-        else:
-            return str(key)
-
-    def on_hotkey_press(self, key):
-        """Handle hotkey presses with rate limiting"""
-        try:
-            # Rate limiting to prevent rapid toggling (thread-safe)
-            current_time = time.time()
-            key_str = str(key)
-
-            with self.hotkey_timing_lock:
-                if key_str in self.last_hotkey_time:
-                    if current_time - self.last_hotkey_time[key_str] < self.hotkey_cooldown:
-                        return  # Ignore rapid key presses
-                self.last_hotkey_time[key_str] = current_time
-
-            # Check emergency stop hotkey first (highest priority)
-            if key == self.emergency_stop_hotkey:
-                self.emergency_stop_all()
-            # Check clicker 1 hotkey
-            elif key == self.clicker1_hotkey:
-                self.toggle_clicker1()
-            # Check clicker 2 hotkey
-            elif key == self.clicker2_hotkey:
-                self.toggle_clicker2()
-            # Check keypresser hotkey
-            elif key == self.keypresser_hotkey:
-                self.toggle_keypresser()
-        except AttributeError as e:
-            # Key comparison failed - likely a key object without expected attributes
-            # This can happen with some special key combinations
-            pass
 
     def toggle_clicker1(self):
         with self.clicker1_lock:
             clicking = self.clicker1_clicking
         if clicking:
-            # Stop clicker 1
             self.stop_clicker1()
         else:
-            # Start clicker 1 (and stop clicker 2 if running)
             self.stop_clicker2()
             self.start_clicker1()
 
@@ -818,10 +1776,8 @@ class DualAutoClicker:
         with self.clicker2_lock:
             clicking = self.clicker2_clicking
         if clicking:
-            # Stop clicker 2
             self.stop_clicker2()
         else:
-            # Start clicker 2 (and stop clicker 1 if running)
             self.stop_clicker1()
             self.start_clicker2()
 
@@ -829,78 +1785,92 @@ class DualAutoClicker:
         with self.clicker1_lock:
             if not self.clicker1_clicking:
                 self.clicker1_clicking = True
-                self._safe_after(0, lambda: self.status1_var.set("Clicking..."))
-                self._safe_after(0, lambda: self.status1_label.config(fg=self._t['red']))
-                self.clicker1_thread = threading.Thread(target=self._click_loop1, daemon=True)
+                self._safe_after(0, lambda: (
+                    self._clicker1_status_lbl.setText("Clicking..."),
+                    self._clicker1_status_lbl.setStyleSheet(
+                        f"color: {STATUS_ACTIVE}; font-weight: bold;"),
+                ))
+                self.clicker1_thread = threading.Thread(
+                    target=self._click_loop1, daemon=True)
                 self.clicker1_thread.start()
 
     def stop_clicker1(self):
         with self.clicker1_lock:
             if self.clicker1_clicking:
                 self.clicker1_clicking = False
-                self._safe_after(0, lambda: self.status1_var.set("Idle"))
-                self._safe_after(0, lambda: self.status1_label.config(fg=self._t['green']))
+                self._safe_after(0, lambda: (
+                    self._clicker1_status_lbl.setText("Idle"),
+                    self._clicker1_status_lbl.setStyleSheet(
+                        f"color: {STATUS_IDLE}; font-weight: bold;"),
+                ))
 
     def start_clicker2(self):
         with self.clicker2_lock:
             if not self.clicker2_clicking:
                 self.clicker2_clicking = True
-                self._safe_after(0, lambda: self.status2_var.set("Clicking..."))
-                self._safe_after(0, lambda: self.status2_label.config(fg=self._t['red']))
-                self.clicker2_thread = threading.Thread(target=self._click_loop2, daemon=True)
+                self._safe_after(0, lambda: (
+                    self._clicker2_status_lbl.setText("Clicking..."),
+                    self._clicker2_status_lbl.setStyleSheet(
+                        f"color: {STATUS_ACTIVE}; font-weight: bold;"),
+                ))
+                self.clicker2_thread = threading.Thread(
+                    target=self._click_loop2, daemon=True)
                 self.clicker2_thread.start()
 
     def stop_clicker2(self):
         with self.clicker2_lock:
             if self.clicker2_clicking:
                 self.clicker2_clicking = False
-                self._safe_after(0, lambda: self.status2_var.set("Idle"))
-                self._safe_after(0, lambda: self.status2_label.config(fg=self._t['green']))
+                self._safe_after(0, lambda: (
+                    self._clicker2_status_lbl.setText("Idle"),
+                    self._clicker2_status_lbl.setStyleSheet(
+                        f"color: {STATUS_IDLE}; font-weight: bold;"),
+                ))
 
     def _click_loop1(self):
-        """Click loop for clicker 1 with error handling"""
         while True:
             with self.clicker1_lock:
                 if not self.clicker1_clicking:
                     break
                 interval = self.clicker1_interval
-
             try:
                 self.perform_click()
             except Exception as e:
                 print(f"Error in clicker 1: {e}")
                 with self.clicker1_lock:
                     self.clicker1_clicking = False
-                self._safe_after(0, lambda: self.status1_var.set("Error"))
-                self._safe_after(0, lambda: self.status1_label.config(fg=self._t['orange']))
+                self._safe_after(0, lambda: (
+                    self._clicker1_status_lbl.setText("Error"),
+                    self._clicker1_status_lbl.setStyleSheet(
+                        f"color: {STATUS_ERROR}; font-weight: bold;"),
+                ))
                 break
-
             time.sleep(interval)
 
     def _click_loop2(self):
-        """Click loop for clicker 2 with error handling"""
         while True:
             with self.clicker2_lock:
                 if not self.clicker2_clicking:
                     break
                 interval = self.clicker2_interval
-
             try:
                 self.perform_click()
             except Exception as e:
                 print(f"Error in clicker 2: {e}")
                 with self.clicker2_lock:
                     self.clicker2_clicking = False
-                self._safe_after(0, lambda: self.status2_var.set("Error"))
-                self._safe_after(0, lambda: self.status2_label.config(fg=self._t['orange']))
+                self._safe_after(0, lambda: (
+                    self._clicker2_status_lbl.setText("Error"),
+                    self._clicker2_status_lbl.setStyleSheet(
+                        f"color: {STATUS_ERROR}; font-weight: bold;"),
+                ))
                 break
-
             time.sleep(interval)
 
     def toggle_keypresser(self):
         with self.keypresser_lock:
-            is_pressing = self.keypresser_pressing
-        if is_pressing:
+            pressing = self.keypresser_pressing
+        if pressing:
             self.stop_keypresser()
         else:
             self.start_keypresser()
@@ -909,381 +1879,282 @@ class DualAutoClicker:
         with self.keypresser_lock:
             if not self.keypresser_pressing:
                 self.keypresser_pressing = True
-                self._safe_after(0, lambda: self.keypresser_status_var.set("Pressing..."))
-                self._safe_after(0, lambda: self.keypresser_status_label.config(fg=self._t['red']))
-                self.keypresser_thread = threading.Thread(target=self._keypresser_loop, daemon=True)
+                self._safe_after(0, lambda: (
+                    self._keypresser_status_lbl.setText("Pressing..."),
+                    self._keypresser_status_lbl.setStyleSheet(
+                        f"color: {STATUS_ACTIVE}; font-weight: bold;"),
+                ))
+                self.keypresser_thread = threading.Thread(
+                    target=self._keypresser_loop, daemon=True)
                 self.keypresser_thread.start()
 
     def stop_keypresser(self):
         with self.keypresser_lock:
             if self.keypresser_pressing:
                 self.keypresser_pressing = False
-                self._safe_after(0, lambda: self.keypresser_status_var.set("Idle"))
-                self._safe_after(0, lambda: self.keypresser_status_label.config(fg=self._t['green']))
+                self._safe_after(0, lambda: (
+                    self._keypresser_status_lbl.setText("Idle"),
+                    self._keypresser_status_lbl.setStyleSheet(
+                        f"color: {STATUS_IDLE}; font-weight: bold;"),
+                ))
 
     def _keypresser_loop(self):
-        """Key press loop with error handling"""
         while True:
             with self.keypresser_lock:
                 if not self.keypresser_pressing:
                     break
-                interval = self.keypresser_interval
+                interval   = self.keypresser_interval
                 target_key = self.keypresser_target_key
-
             try:
                 self.perform_keypress(target_key)
             except Exception as e:
                 print(f"Error in key presser: {e}")
                 with self.keypresser_lock:
                     self.keypresser_pressing = False
-                self._safe_after(0, lambda: self.keypresser_status_var.set("Error"))
-                self._safe_after(0, lambda: self.keypresser_status_label.config(fg=self._t['orange']))
+                self._safe_after(0, lambda: (
+                    self._keypresser_status_lbl.setText("Error"),
+                    self._keypresser_status_lbl.setStyleSheet(
+                        f"color: {STATUS_ERROR}; font-weight: bold;"),
+                ))
                 break
-
             time.sleep(interval)
 
     def emergency_stop_all(self):
-        """Stop all autoclickers and key presser immediately"""
         self.stop_clicker1()
         self.stop_clicker2()
         self.stop_keypresser()
 
-    def start_keyboard_listener(self):
-        # Stop existing listener first if present to prevent resource leak
+    # ══════════════════════════════════════════════════════════════
+    #  Global keyboard listener (pynput)
+    # ══════════════════════════════════════════════════════════════
+
+    def _start_keyboard_listener(self):
         if self.keyboard_listener:
             try:
                 self.keyboard_listener.stop()
             except Exception:
                 pass
-        self.keyboard_listener = keyboard.Listener(on_press=self.on_hotkey_press)
+        self.keyboard_listener = keyboard.Listener(on_press=self._on_hotkey_press)
         self.keyboard_listener.start()
 
-    def stop_keyboard_listener(self):
+    def _stop_keyboard_listener(self):
         if self.keyboard_listener:
             try:
                 self.keyboard_listener.stop()
             except Exception:
                 pass
 
-    def on_closing(self):
+    def _on_hotkey_press(self, key):
+        try:
+            current_time = time.time()
+            key_str = str(key)
+            with self.hotkey_timing_lock:
+                if key_str in self.last_hotkey_time:
+                    if current_time - self.last_hotkey_time[key_str] < self.hotkey_cooldown:
+                        return
+                self.last_hotkey_time[key_str] = current_time
+
+            if key == self.emergency_stop_hotkey:
+                self.emergency_stop_all()
+            elif key == self.clicker1_hotkey:
+                self.toggle_clicker1()
+            elif key == self.clicker2_hotkey:
+                self.toggle_clicker2()
+            elif key == self.keypresser_hotkey:
+                self.toggle_keypresser()
+        except AttributeError:
+            pass
+
+    # ══════════════════════════════════════════════════════════════
+    #  Window close
+    # ══════════════════════════════════════════════════════════════
+
+    def closeEvent(self, event):
         self.stop_clicker1()
         self.stop_clicker2()
         self.stop_keypresser()
-        self.stop_keyboard_listener()
+        self._stop_keyboard_listener()
         if self.hotkey_capture_listener:
             try:
                 self.hotkey_capture_listener.stop()
             except Exception:
                 pass
-        # Wait for threads to finish to ensure clean shutdown
-        for name, thread in [("Clicker 1", self.clicker1_thread),
-                             ("Clicker 2", self.clicker2_thread),
-                             ("Key presser", self.keypresser_thread)]:
+        for thread in [self.clicker1_thread, self.clicker2_thread, self.keypresser_thread]:
             if thread and thread.is_alive():
                 thread.join(timeout=1.0)
-                if thread.is_alive():
-                    print(f"Warning: {name} thread did not exit cleanly")
-        self.save_config()
-        self.window.destroy()
+        self._save_config()
+        event.accept()
 
-    # Update feature methods
-    def _show_about(self):
-        """Show about dialog with clickable link and image."""
-        t = self._t
-        dialog = tk.Toplevel(self.window)
-        dialog.title("About")
-        dialog.configure(bg=t['bg'])
-        dialog.transient(self.window)
-        dialog.grab_set()
-        dialog.resizable(False, False)
-
-        tk.Label(dialog, text=f"Dual AutoClicker + Key Presser",
-                 font=("Arial", 14, "bold"), bg=t['bg'], fg=t['fg']
-                 ).pack(pady=(20, 5))
-
-        tk.Label(dialog, text=f"v{__version__}",
-                 font=("Arial", 10), bg=t['bg'], fg=t['muted']
-                 ).pack(pady=(0, 10))
-
-        tk.Label(dialog, text="A cross-platform dual autoclicker\nwith keyboard presser and configurable hotkeys.",
-                 justify=tk.CENTER, bg=t['bg'], fg=t['fg']
-                 ).pack(pady=(0, 10))
-
-        # Clickable GitHub link
-        link = tk.Label(dialog, text="github.com/jj-repository/autoclicker",
-                        fg=t['link'], bg=t['bg'], cursor="hand2",
-                        font=("Arial", 10, "underline"))
-        link.pack(pady=(0, 15))
-        link.bind("<Button-1>", lambda e: __import__('webbrowser').open("https://github.com/jj-repository/autoclicker"))
-
-        # Takodachi image
-        if self._about_image:
-            tk.Label(dialog, image=self._about_image, bg=t['bg']).pack(pady=(5, 5))
-
-        tk.Label(dialog, text="by JJ", font=("Arial", 11, "italic"),
-                 bg=t['bg'], fg=t['muted']).pack(pady=(0, 15))
-
-        ttk.Button(dialog, text="OK", command=dialog.destroy).pack(pady=(0, 20))
-
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() - dialog.winfo_reqwidth()) // 2
-        y = (dialog.winfo_screenheight() - dialog.winfo_reqheight()) // 2
-        dialog.geometry(f"+{x}+{y}")
+    # ══════════════════════════════════════════════════════════════
+    #  Version comparison
+    # ══════════════════════════════════════════════════════════════
 
     def _version_newer(self, latest, current):
-        """
-        Compare version strings to check if latest is newer than current.
-
-        Handles semantic versioning with pre-release suffixes:
-        - "1.4.0" > "1.3.0"
-        - "1.4.0" > "1.4.0-beta"
-        - "1.4.0-beta2" > "1.4.0-beta1"
-        """
-        def parse_version(version_str):
-            """Parse version string into comparable tuple."""
-            if not version_str or not isinstance(version_str, str):
-                return (0, 0, 0, '', 0)
-
-            # Remove 'v' prefix if present
-            version_str = version_str.lstrip('v')
-
-            # Split by hyphen to separate main version from pre-release
-            if '-' in version_str:
-                main_part, pre_release = version_str.split('-', 1)
-            else:
-                main_part, pre_release = version_str, ''
-
-            # Parse main version parts
+        def parse_version(v):
+            if not v or not isinstance(v, str):
+                return (0, 0, 0, True, 0)
+            v = v.lstrip("v")
+            main, _, pre = v.partition("-")
             parts = []
-            for part in main_part.split('.'):
-                try:
-                    parts.append(int(part))
-                except ValueError:
-                    # Handle non-numeric parts by extracting leading digits
-                    digits = ''
-                    for c in part:
-                        if c.isdigit():
-                            digits += c
-                        else:
-                            break
-                    parts.append(int(digits) if digits else 0)
-
-            # Pad to at least 3 parts
+            for p in main.split("."):
+                digits = "".join(c for c in p if c.isdigit())
+                parts.append(int(digits) if digits else 0)
             while len(parts) < 3:
                 parts.append(0)
-
-            # Parse pre-release number if present (e.g., "beta2" -> 2)
-            pre_release_num = 0
-            if pre_release:
-                digits = ''.join(c for c in pre_release if c.isdigit())
-                pre_release_num = int(digits) if digits else 0
-
-            # Return tuple: (major, minor, patch, pre_release_str, pre_release_num)
-            # Empty pre_release string sorts AFTER any pre-release (stable > beta)
-            return (parts[0], parts[1], parts[2], pre_release == '', pre_release_num)
-
+            pre_num = int("".join(c for c in pre if c.isdigit())) if pre else 0
+            return (parts[0], parts[1], parts[2], pre == "", pre_num)
         try:
-            latest_parsed = parse_version(latest)
-            current_parsed = parse_version(current)
-            return latest_parsed > current_parsed
+            return parse_version(latest) > parse_version(current)
         except Exception:
             return False
 
-    def _check_for_updates_clicked(self):
-        """Handle Check for Updates menu click."""
-        threading.Thread(target=self._check_for_updates, args=(False,), daemon=True).start()
+    # ══════════════════════════════════════════════════════════════
+    #  Update system
+    # ══════════════════════════════════════════════════════════════
 
-    def _toggle_auto_check_updates(self):
-        """Toggle automatic update checking on startup."""
-        self.auto_check_updates = self.auto_check_var.get()
-        self.save_config()
-
-    def _check_for_updates(self, silent=True):
-        """Check GitHub for new version."""
-        import urllib.request
-        import urllib.error
-
+    def _check_for_updates(self, silent: bool = True):
         try:
-            request = urllib.request.Request(
+            req = urllib.request.Request(
                 GITHUB_API_LATEST,
-                headers={'User-Agent': f'DualAutoClicker/{__version__}'}
+                headers={"User-Agent": f"AutoClicker/{__version__}"}
             )
-            with urllib.request.urlopen(request, timeout=10) as response:
-                raw = response.read(1024 * 1024 + 1)  # 1MB limit
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read(1024 * 1024 + 1)
                 if len(raw) > 1024 * 1024:
                     raise ValueError("API response too large")
                 data = json.loads(raw.decode())
 
-            latest_version = data.get('tag_name', '').lstrip('v')
+            latest = data.get("tag_name", "").lstrip("v")
+            if not latest:
+                raise ValueError("No version tag found")
 
-            if not latest_version:
-                raise ValueError("No version tag found in release")
-
-            if self._version_newer(latest_version, __version__):
-                self._safe_after(0, lambda: self._show_update_dialog(latest_version, data))
+            if self._version_newer(latest, __version__):
+                self._safe_after(0, lambda: self._show_update_dialog(latest, data))
             elif not silent:
-                self._safe_after(0, lambda: messagebox.showinfo(
-                    "Up to Date",
+                self._safe_after(0, lambda: QMessageBox.information(
+                    self, "Up to Date",
                     f"You are running the latest version (v{__version__})."
                 ))
-
         except urllib.error.URLError as e:
             if not silent:
-                self._safe_after(0, lambda: messagebox.showerror(
-                    "Update Error",
-                    f"Failed to check for updates:\n{e}"
-                ))
+                self._safe_after(0, lambda: QMessageBox.critical(
+                    self, "Update Error", f"Failed to check for updates:\n{e}"))
         except Exception as e:
             if not silent:
-                self._safe_after(0, lambda: messagebox.showerror(
-                    "Update Error",
-                    f"Failed to check for updates:\n{e}"
-                ))
+                self._safe_after(0, lambda: QMessageBox.critical(
+                    self, "Update Error", f"Failed to check for updates:\n{e}"))
 
-    def _show_update_dialog(self, latest_version, release_data):
-        """Show update available dialog with options."""
-        dialog = tk.Toplevel(self.window)
-        dialog.title("Update Available")
-        dialog.transient(self.window)
-        dialog.grab_set()
-        dialog.geometry("400x200")
-        dialog.resizable(False, False)
+    def _show_update_dialog(self, latest_version: str, release_data: dict):
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Update Available")
+        msg.setText(f"A new version is available!")
+        msg.setInformativeText(
+            f"Current: v{__version__}\nLatest: v{latest_version}\n\n"
+            "Would you like to update now?"
+        )
+        update_btn  = msg.addButton("Update Now",      QMessageBox.ButtonRole.AcceptRole)
+        release_btn = msg.addButton("Open Releases",   QMessageBox.ButtonRole.ActionRole)
+        msg.addButton("Later",                         QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
 
-        msg = f"A new version is available!\n\nCurrent: v{__version__}\nLatest: v{latest_version}\n\nWould you like to update?"
-        ttk.Label(dialog, text=msg, justify=tk.CENTER, wraplength=350).pack(pady=20)
+        clicked = msg.clickedButton()
+        if clicked is update_btn:
+            threading.Thread(
+                target=self._apply_update, args=(release_data,), daemon=True).start()
+        elif clicked is release_btn:
+            QDesktopServices.openUrl(QUrl(GITHUB_RELEASES_URL))
 
-        btn_frame = ttk.Frame(dialog)
-        btn_frame.pack(pady=10)
-
-        def update_now():
-            dialog.destroy()
-            threading.Thread(target=self._apply_update, args=(release_data,), daemon=True).start()
-
-        def open_releases():
-            dialog.destroy()
-            import webbrowser
-            webbrowser.open(GITHUB_RELEASES_URL)
-
-        ttk.Button(btn_frame, text="Update Now", command=update_now).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Open Releases", command=open_releases).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Later", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
-
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() - dialog.winfo_width()) // 2
-        y = (dialog.winfo_screenheight() - dialog.winfo_height()) // 2
-        dialog.geometry(f"+{x}+{y}")
-
-    def _apply_update(self, release_data):
-        """
-        Download and apply update with SHA256 checksum verification.
-
-        Security measures:
-        - SHA256 checksum verification BEFORE any file operations
-        - Atomic file replacement using os.replace()
-        - Temp file created in same directory as target for atomic replace
-        - Backup created before replacement
-        - All file operations are verified
-        """
-        import urllib.request
-        import urllib.error
-        import shutil
-        import hashlib
+    def _apply_update(self, release_data: dict):
+        """Download and apply update with SHA256 verification."""
         import os as os_module
 
         tmp_path = None
-
-        # Progress dialog state (populated on main thread via _safe_after)
-        progress_state = {'dialog': None, 'label': None, 'bar': None}
+        progress_state = {"dialog": None, "label": None, "bar": None}
 
         def _create_progress_dialog():
-            t = self._t
-            dlg = tk.Toplevel(self.window)
-            dlg.title('Downloading Update')
-            dlg.geometry('360x90')
-            dlg.resizable(False, False)
-            dlg.transient(self.window)
-            dlg.grab_set()
-            dlg.protocol('WM_DELETE_WINDOW', lambda: None)
-            dlg.configure(bg=t['bg'])
-            lbl = tk.Label(dlg, text='Downloading update...', bg=t['bg'], fg=t['fg'])
-            lbl.pack(pady=(12, 4))
-            bar = ttk.Progressbar(dlg, length=320, mode='determinate', maximum=100)
-            bar.pack(padx=20, pady=(0, 12))
-            progress_state['dialog'] = dlg
-            progress_state['label'] = lbl
-            progress_state['bar'] = bar
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Downloading Update")
+            dlg.setFixedSize(380, 100)
+            dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+            dlg.setModal(True)
+            layout = QVBoxLayout(dlg)
+            lbl = QLabel("Downloading update...")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(lbl)
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            layout.addWidget(bar)
+            progress_state["dialog"] = dlg
+            progress_state["label"]  = lbl
+            progress_state["bar"]    = bar
+            dlg.show()
 
-        def _update_progress_dialog(pct, mb, total_mb):
-            if progress_state['label']:
-                progress_state['label'].config(
-                    text=f'Downloading update... {mb:.1f}/{total_mb:.1f} MB ({pct}%)'
-                )
-            if progress_state['bar']:
-                progress_state['bar']['value'] = pct
+        def _update_progress(pct, mb, total_mb):
+            if progress_state["label"]:
+                progress_state["label"].setText(
+                    f"Downloading update... {mb:.1f}/{total_mb:.1f} MB ({pct}%)")
+            if progress_state["bar"]:
+                progress_state["bar"].setValue(pct)
 
-        def _close_progress_dialog():
-            if progress_state['dialog']:
+        def _close_progress():
+            dlg = progress_state.get("dialog")
+            if dlg:
                 try:
-                    progress_state['dialog'].grab_release()
-                    progress_state['dialog'].destroy()
-                except tk.TclError:
+                    dlg.close()
+                except Exception:
                     pass
-                progress_state['dialog'] = None
+                progress_state["dialog"] = None
 
-        self._safe_after(0, _create_progress_dialog)
+        QTimer.singleShot(0, _create_progress_dialog)
 
         try:
-            tag_name = release_data.get('tag_name', 'main')
+            tag_name     = release_data.get("tag_name", "main")
             download_url = f"{GITHUB_RAW_URL}/{tag_name}/autoclicker.py"
             checksum_url = f"{GITHUB_RAW_URL}/{tag_name}/autoclicker.py.sha256"
+            headers      = {"User-Agent": f"AutoClicker/{__version__}"}
 
-            headers = {'User-Agent': f'DualAutoClicker/{__version__}'}
-
-            # First, download and validate the checksum file
+            # Download checksum
             expected_checksum = None
             try:
-                checksum_request = urllib.request.Request(checksum_url, headers=headers)
-                with urllib.request.urlopen(checksum_request, timeout=30) as response:
-                    checksum_content = response.read().decode().strip()
-                    # Validate checksum file is not empty
-                    if not checksum_content:
+                chk_req = urllib.request.Request(checksum_url, headers=headers)
+                with urllib.request.urlopen(chk_req, timeout=30) as resp:
+                    chk_content = resp.read().decode().strip()
+                    if not chk_content:
                         raise ValueError("Checksum file is empty")
-                    # Format: "sha256hash  filename" or just "sha256hash"
-                    parts = checksum_content.split()
+                    parts = chk_content.split()
                     if not parts:
-                        raise ValueError("Checksum file contains no valid hash")
+                        raise ValueError("No valid hash in checksum file")
                     expected_checksum = parts[0].lower()
-                    # Validate checksum format (must be exactly 64 hex characters)
-                    if len(expected_checksum) != 64 or not all(c in '0123456789abcdef' for c in expected_checksum):
-                        raise ValueError("Invalid checksum format - not a valid SHA256 hash")
+                    if len(expected_checksum) != 64 or not all(
+                            c in "0123456789abcdef" for c in expected_checksum):
+                        raise ValueError("Invalid checksum format")
             except urllib.error.HTTPError as e:
                 if e.code == 404:
-                    # Checksum file doesn't exist - abort for security
-                    self._safe_after(0, lambda: messagebox.showwarning(
-                        "Update Aborted",
+                    self._safe_after(0, lambda: _close_progress())
+                    self._safe_after(0, lambda: QMessageBox.warning(
+                        self, "Update Aborted",
                         "No checksum file found for this release.\n\n"
-                        "This means the update cannot be verified for integrity.\n\n"
-                        "For your security, updates without checksums are not allowed.\n\n"
-                        "Please download the update manually from:\n"
-                        f"{GITHUB_RELEASES_URL}"
+                        "For security, updates without checksums are not allowed.\n\n"
+                        f"Please download manually from:\n{GITHUB_RELEASES_URL}"
                     ))
                     return
                 raise
 
-            # Download the update file in chunks with progress reporting
-            request = urllib.request.Request(download_url, headers=headers)
-            with urllib.request.urlopen(request, timeout=60) as response:
-                content_length = response.headers.get('Content-Length')
+            # Download file in chunks
+            req = urllib.request.Request(download_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                content_length = resp.headers.get("Content-Length")
                 total_bytes = 0
                 if content_length:
                     try:
                         total_bytes = int(content_length)
                         if total_bytes > MAX_DOWNLOAD_SIZE:
-                            self._safe_after(0, lambda: messagebox.showerror(
-                                "Update Failed",
-                                f"Update file too large ({total_bytes / 1024 / 1024:.1f}MB).\n"
-                                f"Maximum allowed: {MAX_DOWNLOAD_SIZE / 1024 / 1024:.1f}MB\n\n"
-                                "This may indicate a compromised update. Please download manually."
+                            self._safe_after(0, lambda: _close_progress())
+                            self._safe_after(0, lambda: QMessageBox.critical(
+                                self, "Update Failed",
+                                f"Update file too large ({total_bytes/1024/1024:.1f} MB).\n"
+                                "Please download manually."
                             ))
                             return
                     except ValueError:
@@ -1292,177 +2163,160 @@ class DualAutoClicker:
                 chunks = []
                 downloaded = 0
                 while True:
-                    chunk = response.read(64 * 1024)
+                    chunk = resp.read(64 * 1024)
                     if not chunk:
                         break
                     chunks.append(chunk)
                     downloaded += len(chunk)
                     if downloaded > MAX_DOWNLOAD_SIZE:
-                        self._safe_after(0, lambda: messagebox.showerror(
-                            "Update Failed",
-                            f"Update file exceeds maximum size ({MAX_DOWNLOAD_SIZE / 1024 / 1024:.1f}MB).\n\n"
-                            "This may indicate a compromised update. Please download manually."
+                        self._safe_after(0, lambda: _close_progress())
+                        self._safe_after(0, lambda: QMessageBox.critical(
+                            self, "Update Failed",
+                            f"Update exceeds max size ({MAX_DOWNLOAD_SIZE//1024//1024} MB)."
                         ))
                         return
                     if total_bytes > 0:
-                        pct = int(downloaded / total_bytes * 100)
-                        mb = downloaded / (1024 * 1024)
-                        total_mb = total_bytes / (1024 * 1024)
+                        pct      = int(downloaded / total_bytes * 100)
+                        mb       = downloaded / 1024 / 1024
+                        total_mb = total_bytes / 1024 / 1024
                         self._safe_after(0, lambda p=pct, m=mb, t=total_mb:
-                                         _update_progress_dialog(p, m, t))
-                content = b''.join(chunks)
+                                         _update_progress(p, m, t))
+                content = b"".join(chunks)
 
-            # CRITICAL: Verify checksum BEFORE any file operations
+            # Verify checksum
             sha256_hash = hashlib.sha256(content).hexdigest().lower()
-
             if sha256_hash != expected_checksum:
-                self._safe_after(0, lambda: messagebox.showerror(
-                    "Security Error",
+                self._safe_after(0, lambda: _close_progress())
+                self._safe_after(0, lambda: QMessageBox.critical(
+                    self, "Security Error",
                     "CHECKSUM VERIFICATION FAILED!\n\n"
                     f"Expected: {expected_checksum}\n"
-                    f"Got: {sha256_hash}\n\n"
-                    "The downloaded file may have been tampered with.\n"
-                    "Update has been aborted for your safety.\n\n"
-                    "Please report this issue on GitHub."
+                    f"Got:      {sha256_hash}\n\n"
+                    "Update aborted for your safety."
                 ))
                 return
 
-            # Checksum verified - now perform atomic file operations
+            # Write to temp file
             current_script = Path(__file__).resolve()
-            script_dir = current_script.parent
-            backup_path = current_script.with_suffix('.py.backup')
+            script_dir     = current_script.parent
+            backup_path    = current_script.with_suffix(".py.backup")
+            tmp_path       = script_dir / f".autoclicker_update_{os_module.getpid()}.tmp"
 
-            # Create temp file in SAME directory as target for atomic replace
-            # (os.replace() is only atomic within the same filesystem)
-            tmp_path = script_dir / f".autoclicker_update_{os_module.getpid()}.tmp"
-
-            # Write verified content to temp file
             try:
-                with open(tmp_path, 'wb') as f:
+                with open(tmp_path, "wb") as f:
                     f.write(content)
                     f.flush()
-                    os_module.fsync(f.fileno())  # Ensure data is written to disk
-            except (IOError, OSError) as write_error:
-                self._safe_after(0, lambda: messagebox.showerror(
-                    "Update Failed",
-                    f"Failed to write update file:\n{write_error}"
-                ))
+                    os_module.fsync(f.fileno())
+            except (IOError, OSError) as e:
+                self._safe_after(0, lambda: _close_progress())
+                self._safe_after(0, lambda: QMessageBox.critical(
+                    self, "Update Failed", f"Failed to write update file:\n{e}"))
                 return
 
-            # Verify the written file matches (defense against write errors)
+            # Verify written file
             try:
-                with open(tmp_path, 'rb') as f:
-                    written_hash = hashlib.sha256(f.read()).hexdigest().lower()
-                if written_hash != expected_checksum:
-                    raise ValueError("Written file checksum doesn't match")
-            except Exception as verify_error:
-                self._safe_after(0, lambda: messagebox.showerror(
-                    "Update Failed",
-                    f"Failed to verify written file:\n{verify_error}"
-                ))
+                with open(tmp_path, "rb") as f:
+                    if hashlib.sha256(f.read()).hexdigest().lower() != expected_checksum:
+                        raise ValueError("Written file checksum mismatch")
+            except Exception as e:
+                self._safe_after(0, lambda: _close_progress())
+                self._safe_after(0, lambda: QMessageBox.critical(
+                    self, "Update Failed", f"Failed to verify written file:\n{e}"))
                 return
 
-            # Create backup of current script
+            # Backup
             try:
                 shutil.copy2(current_script, backup_path)
-            except (IOError, OSError) as backup_error:
-                self._safe_after(0, lambda: messagebox.showerror(
-                    "Update Failed",
-                    f"Failed to create backup:\n{backup_error}"
-                ))
+            except (IOError, OSError) as e:
+                self._safe_after(0, lambda: _close_progress())
+                self._safe_after(0, lambda: QMessageBox.critical(
+                    self, "Update Failed", f"Failed to create backup:\n{e}"))
                 return
 
-            # Replace the current script with the update
+            # Atomic replace
             try:
-                if sys.platform == 'win32':
-                    # On Windows, os.replace() can fail when the target file
-                    # is locked.  Windows does allow renaming an in-use file,
-                    # so rename the current script out of the way first, then
-                    # move the new file in.  If the move fails, restore the
-                    # original from the .old rename.
-                    old_path = current_script.with_suffix('.py.old')
-                    try:
-                        # Remove any leftover .old file from a previous update
-                        if old_path.exists():
-                            old_path.unlink()
-                        os_module.rename(str(current_script), str(old_path))
-                    except OSError as rename_error:
-                        self._safe_after(0, lambda: messagebox.showerror(
-                            "Update Failed",
-                            f"Failed to rename current script:\n{rename_error}\n\n"
-                            f"Your backup is safe at:\n{backup_path}"
-                        ))
-                        return
+                if sys.platform == "win32":
+                    old_path = current_script.with_suffix(".py.old")
+                    if old_path.exists():
+                        old_path.unlink()
+                    os_module.rename(str(current_script), str(old_path))
                     try:
                         os_module.rename(str(tmp_path), str(current_script))
-                        tmp_path = None  # Mark as successfully moved
-                    except OSError as move_error:
-                        # Restore the original file from .old
+                        tmp_path = None
+                    except OSError as e:
                         try:
                             os_module.rename(str(old_path), str(current_script))
                         except OSError:
-                            pass  # backup_path still has a copy
-                        self._safe_after(0, lambda: messagebox.showerror(
-                            "Update Failed",
-                            f"Failed to move update into place:\n{move_error}\n\n"
-                            f"Your backup is safe at:\n{backup_path}"
+                            pass
+                        self._safe_after(0, lambda: _close_progress())
+                        self._safe_after(0, lambda: QMessageBox.critical(
+                            self, "Update Failed",
+                            f"Failed to move update into place:\n{e}\n"
+                            f"Backup safe at: {backup_path}"
                         ))
                         return
                 else:
-                    # POSIX: os.replace() is atomic
                     os_module.replace(str(tmp_path), str(current_script))
-                    tmp_path = None  # Mark as successfully moved (no cleanup needed)
-            except (IOError, OSError) as replace_error:
-                self._safe_after(0, lambda: messagebox.showerror(
-                    "Update Failed",
-                    f"Failed to apply update:\n{replace_error}\n\n"
-                    f"Your backup is safe at:\n{backup_path}"
+                    tmp_path = None
+            except (IOError, OSError) as e:
+                self._safe_after(0, lambda: _close_progress())
+                self._safe_after(0, lambda: QMessageBox.critical(
+                    self, "Update Failed",
+                    f"Failed to apply update:\n{e}\n"
+                    f"Backup safe at: {backup_path}"
                 ))
                 return
 
-            # Clean up backup and any leftover .old file
-            for _stale in [backup_path, current_script.with_suffix('.py.old')]:
+            # Clean up stale backup / .old files
+            for stale in [backup_path, current_script.with_suffix(".py.old")]:
                 try:
-                    if _stale.exists():
-                        _stale.unlink()
+                    if stale.exists():
+                        stale.unlink()
                 except OSError:
                     pass
 
-            def _on_update_complete():
-                _close_progress_dialog()
-                messagebox.showinfo(
-                    "Update Applied",
+            def _on_complete():
+                _close_progress()
+                QMessageBox.information(
+                    self, "Update Applied",
                     "AutoClicker has been updated successfully!\n\n"
                     "Please relaunch AutoClicker to run the new version."
                 )
-                self.on_closing()
+                self.close()
 
-            self._safe_after(0, _on_update_complete)
+            self._safe_after(0, _on_complete)
 
         except urllib.error.URLError as e:
-            self._safe_after(0, lambda: _close_progress_dialog())
-            self._safe_after(0, lambda: messagebox.showerror(
-                "Update Failed",
+            self._safe_after(0, lambda: _close_progress())
+            self._safe_after(0, lambda: QMessageBox.critical(
+                self, "Update Failed",
                 f"Network error while downloading update:\n{e}"
             ))
         except Exception as e:
-            self._safe_after(0, lambda: _close_progress_dialog())
-            self._safe_after(0, lambda: messagebox.showerror(
-                "Update Failed",
+            self._safe_after(0, lambda: _close_progress())
+            self._safe_after(0, lambda: QMessageBox.critical(
+                self, "Update Failed",
                 f"Unexpected error during update:\n{type(e).__name__}: {e}"
             ))
         finally:
-            # Clean up temp file if it still exists (failed update)
             if tmp_path is not None:
                 try:
                     Path(tmp_path).unlink()
-                except OSError as cleanup_error:
-                    print(f"Warning: Failed to clean up temp file {tmp_path}: {cleanup_error}")
+                except OSError as cleanup_err:
+                    print(f"Warning: Failed to clean up temp file {tmp_path}: {cleanup_err}")
 
-    def run(self):
-        self.window.mainloop()
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Entry point
+# ═══════════════════════════════════════════════════════════════════════
+
+def main():
+    app = QApplication(sys.argv)
+    app.setWindowIcon(_make_icon())
+    win = AppWindow()
+    win.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
-    app = DualAutoClicker()
-    app.run()
+    main()
