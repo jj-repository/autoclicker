@@ -31,7 +31,7 @@ pyinstaller --onefile --name autoclicker-evdev --add-data "icon.png:." --add-dat
 
 # Build basic version
 echo "Building autoclicker-basic..."
-pyinstaller --onefile --name autoclicker-basic --add-data "icon.png:." --add-data "takodachi.png:." --collect-all PyQt6 autoclicker.py
+pyinstaller --onefile --name autoclicker-basic --add-data "icon.png:." --add-data "takodachi.png:." autoclicker.py
 
 echo ""
 echo "Build complete! Executables are in the dist/ directory:"

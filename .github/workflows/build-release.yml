@@ -20,7 +20,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller pynput evdev PyQt6
+        pip install pyinstaller pynput evdev
 
     - name: Verify checksum file is current
       run: |
@@ -50,11 +50,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller pynput PyQt6
+        pip install pyinstaller pynput
 
     - name: Build Windows executable
       run: |
-        pyinstaller --onefile --windowed --name Autoclicker-Windows --icon=icon.ico --add-data "icon.ico;." --add-data "icon.png;." --add-data "takodachi.png;." --collect-all PyQt6 autoclicker.py
+        pyinstaller --onefile --windowed --name Autoclicker-Windows --icon=icon.ico --add-data "icon.ico;." --add-data "icon.png;." --add-data "takodachi.png;." autoclicker.py
 
     - name: Upload Windows artifacts
       uses: actions/upload-artifact@v7
