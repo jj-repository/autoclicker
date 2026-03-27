@@ -23,7 +23,7 @@ from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.9.2"
+__version__ = "1.9.3"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"
@@ -983,6 +983,7 @@ class DualAutoClicker:
                 thread.join(timeout=1.0)
                 if thread.is_alive():
                     print(f"Warning: {name} thread did not exit cleanly")
+        self.save_config()
         self.window.destroy()
 
     # Update feature methods
