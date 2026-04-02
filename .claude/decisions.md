@@ -29,4 +29,4 @@
 Target: personal utility — functional, secure, maintainable.
 Do not optimize: click timing is as precise as Python/tkinter allows.
 
-Version bumps default to **+0.0.1** unless told otherwise.
+Version bumps default to **+0.0.1** unless told otherwise. Each component 0–9; rollover on overflow (0.0.9 → 0.1.0).

@@ -54,14 +54,14 @@ jobs:
 
     - name: Build Windows executable
       run: |
-        pyinstaller --onefile --windowed --name Autoclicker-Windows --icon=icon.ico --add-data "icon.ico;." --add-data "icon.png;." --add-data "takodachi.png;." autoclicker.py
+        pyinstaller --onefile --windowed --name Autoclicker --icon=icon.ico --add-data "icon.ico;." --add-data "icon.png;." --add-data "takodachi.png;." autoclicker.py
 
     - name: Upload Windows artifacts
       uses: actions/upload-artifact@v7
       with:
         name: windows-executables
         path: |
-          dist/Autoclicker-Windows.exe
+          dist/Autoclicker.exe
 
   release:
     needs: [build-linux, build-windows]
@@ -90,19 +90,19 @@ jobs:
       with:
         files: |
           dist/linux/Autoclicker-Linux
-          dist/windows/Autoclicker-Windows.exe
+          dist/windows/Autoclicker.exe
         body: |
           ## Downloads
 
           | File | Platform |
           |------|----------|
-          | **Autoclicker-Windows.exe** | Windows |
+          | **Autoclicker.exe** | Windows |
           | **Autoclicker-Linux** | Linux (requires sudo) |
 
           ## Installation
 
           ### Windows
-          1. Download `Autoclicker-Windows.exe`
+          1. Download `Autoclicker.exe`
           2. Run it (may need Administrator privileges)
 
           ### Linux
