@@ -23,7 +23,7 @@ from pathlib import Path
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.9.5"
+__version__ = "1.10"
 
 # Update Constants
 GITHUB_REPO = "jj-repository/autoclicker"
@@ -798,7 +798,7 @@ class DualAutoClicker:
             # Check keypresser hotkey
             elif key == self.keypresser_hotkey:
                 self.toggle_keypresser()
-        except AttributeError as e:
+        except AttributeError:
             # Key comparison failed - likely a key object without expected attributes
             # This can happen with some special key combinations
             pass
@@ -997,7 +997,7 @@ class DualAutoClicker:
         dialog.grab_set()
         dialog.resizable(False, False)
 
-        tk.Label(dialog, text=f"Dual AutoClicker + Key Presser",
+        tk.Label(dialog, text="Dual AutoClicker + Key Presser",
                  font=("Arial", 14, "bold"), bg=t['bg'], fg=t['fg']
                  ).pack(pady=(20, 5))
 
@@ -1129,15 +1129,15 @@ class DualAutoClicker:
 
         except urllib.error.URLError as e:
             if not silent:
-                self._safe_after(0, lambda: messagebox.showerror(
+                self._safe_after(0, lambda _e=e: messagebox.showerror(
                     "Update Error",
-                    f"Failed to check for updates:\n{e}"
+                    f"Failed to check for updates:\n{_e}"
                 ))
         except Exception as e:
             if not silent:
-                self._safe_after(0, lambda: messagebox.showerror(
+                self._safe_after(0, lambda _e=e: messagebox.showerror(
                     "Update Error",
-                    f"Failed to check for updates:\n{e}"
+                    f"Failed to check for updates:\n{_e}"
                 ))
 
     def _show_update_dialog(self, latest_version, release_data):
@@ -1311,9 +1311,9 @@ class DualAutoClicker:
                     f.flush()
                     os_module.fsync(f.fileno())  # Ensure data is written to disk
             except (IOError, OSError) as write_error:
-                self._safe_after(0, lambda: messagebox.showerror(
+                self._safe_after(0, lambda _e=write_error: messagebox.showerror(
                     "Update Failed",
-                    f"Failed to write update file:\n{write_error}"
+                    f"Failed to write update file:\n{_e}"
                 ))
                 return
 
@@ -1321,9 +1321,9 @@ class DualAutoClicker:
             try:
                 shutil.copy2(current_script, backup_path)
             except (IOError, OSError) as backup_error:
-                self._safe_after(0, lambda: messagebox.showerror(
+                self._safe_after(0, lambda _e=backup_error: messagebox.showerror(
                     "Update Failed",
-                    f"Failed to create backup:\n{backup_error}"
+                    f"Failed to create backup:\n{_e}"
                 ))
                 return
 
@@ -1342,9 +1342,9 @@ class DualAutoClicker:
                             old_path.unlink()
                         os_module.rename(str(current_script), str(old_path))
                     except OSError as rename_error:
-                        self._safe_after(0, lambda: messagebox.showerror(
+                        self._safe_after(0, lambda _e=rename_error: messagebox.showerror(
                             "Update Failed",
-                            f"Failed to rename current script:\n{rename_error}\n\n"
+                            f"Failed to rename current script:\n{_e}\n\n"
                             f"Your backup is safe at:\n{backup_path}"
                         ))
                         return
@@ -1357,9 +1357,9 @@ class DualAutoClicker:
                             os_module.rename(str(old_path), str(current_script))
                         except OSError:
                             pass  # backup_path still has a copy
-                        self._safe_after(0, lambda: messagebox.showerror(
+                        self._safe_after(0, lambda _e=move_error: messagebox.showerror(
                             "Update Failed",
-                            f"Failed to move update into place:\n{move_error}\n\n"
+                            f"Failed to move update into place:\n{_e}\n\n"
                             f"Your backup is safe at:\n{backup_path}"
                         ))
                         return
@@ -1368,9 +1368,9 @@ class DualAutoClicker:
                     os_module.replace(str(tmp_path), str(current_script))
                     tmp_path = None  # Mark as successfully moved (no cleanup needed)
             except (IOError, OSError) as replace_error:
-                self._safe_after(0, lambda: messagebox.showerror(
+                self._safe_after(0, lambda _e=replace_error: messagebox.showerror(
                     "Update Failed",
-                    f"Failed to apply update:\n{replace_error}\n\n"
+                    f"Failed to apply update:\n{_e}\n\n"
                     f"Your backup is safe at:\n{backup_path}"
                 ))
                 return
@@ -1396,15 +1396,15 @@ class DualAutoClicker:
 
         except urllib.error.URLError as e:
             self._safe_after(0, lambda: _close_progress_dialog())
-            self._safe_after(0, lambda: messagebox.showerror(
+            self._safe_after(0, lambda _e=e: messagebox.showerror(
                 "Update Failed",
-                f"Network error while downloading update:\n{e}"
+                f"Network error while downloading update:\n{_e}"
             ))
         except Exception as e:
             self._safe_after(0, lambda: _close_progress_dialog())
-            self._safe_after(0, lambda: messagebox.showerror(
+            self._safe_after(0, lambda _e=e: messagebox.showerror(
                 "Update Failed",
-                f"Unexpected error during update:\n{type(e).__name__}: {e}"
+                f"Unexpected error during update:\n{type(_e).__name__}: {_e}"
             ))
         finally:
             # Clean up temp file if it still exists (failed update)

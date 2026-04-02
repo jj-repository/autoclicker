@@ -1,7 +1,7 @@
 # AutoClicker
 
 Python/tkinter automated mouse clicker and keyboard presser with dual clicker support. Two backends: pynput (cross-platform) and evdev (Linux Wayland/games). Stack: Python, tkinter.
-v1.9.5
+v1.10
 
 Docs: .claude/index.md
 

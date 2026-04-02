@@ -1,6 +1,6 @@
 # Overview
 
-v1.9.5 — Dual auto-clicker with keyboard key presser, configurable hotkeys, and emergency stop.
+v1.10 — Dual auto-clicker with keyboard key presser, configurable hotkeys, and emergency stop.
 
 ## Files
 - `autoclicker.py` — main app (pynput, cross-platform)
