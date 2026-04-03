@@ -473,13 +473,6 @@ class AppWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        # Title
-        title = QLabel("Dual AutoClicker + Key Presser")
-        title.setStyleSheet("font-size: 16px; font-weight: bold;")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
-        layout.addSpacing(12)
-
         # ── Clickers side by side ─────────────────────────────
         clickers_row = QHBoxLayout()
 
@@ -660,7 +653,9 @@ class AppWindow(QMainWindow):
         tako_path = base_dir / "takodachi.png"
         if tako_path.exists():
             tako_pix = QPixmap(str(tako_path))
-            if not tako_pix.isNull():
+            if not tako_pix.isNull() and (
+                tako_pix.width() > 120 or tako_pix.height() > 120
+            ):
                 tako_pix = tako_pix.scaled(
                     120,
                     120,
@@ -712,10 +707,6 @@ class AppWindow(QMainWindow):
             )
         )
         btns.addWidget(report_btn)
-
-        logs_btn = QPushButton("Open Logs Folder")
-        logs_btn.clicked.connect(self._open_logs_folder)
-        btns.addWidget(logs_btn)
 
         btns.addStretch()
         layout.addLayout(btns)
@@ -1716,13 +1707,6 @@ class AppWindow(QMainWindow):
                         f"Warning: Failed to clean up temp file "
                         f"{tmp_path}: {cleanup_error}"
                     )
-
-    # ── Utilities ─────────────────────────────────────────────
-
-    def _open_logs_folder(self):
-        logs = _settings_path().parent / "logs"
-        logs.mkdir(parents=True, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(logs)))
 
     # ── Window close ──────────────────────────────────────────
 
