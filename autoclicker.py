@@ -653,15 +653,14 @@ class AppWindow(QMainWindow):
         tako_path = base_dir / "takodachi.png"
         if tako_path.exists():
             tako_pix = QPixmap(str(tako_path))
-            if not tako_pix.isNull() and (
-                tako_pix.width() > 120 or tako_pix.height() > 120
-            ):
-                tako_pix = tako_pix.scaled(
-                    120,
-                    120,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
+            if not tako_pix.isNull():
+                if tako_pix.width() > 120 or tako_pix.height() > 120:
+                    tako_pix = tako_pix.scaled(
+                        120,
+                        120,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
                 tako_label = QLabel()
                 tako_label.setPixmap(tako_pix)
                 tako_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
