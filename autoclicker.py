@@ -1,906 +1,1272 @@
 #!/usr/bin/env python3
 """
-Dual AutoClicker + Key Presser - Cross-Platform Version (pynput)
+Dual AutoClicker + Key Presser — Cross-Platform Version (pynput)
+================================================================
+PyQt6 GUI using JJ GUI-Template style.
 
-This version uses pynput for mouse control, keyboard key pressing,
-and hotkey detection. Works on Windows, macOS, and Linux (X11).
-
-Use this version when:
-- Running on Windows or macOS
-- Running on Linux with X11 (not Wayland)
+Uses pynput for mouse control, keyboard key pressing, and hotkey detection.
+Works on Windows, macOS, and Linux (X11).
 
 For Linux with Wayland or games that don't detect pynput input,
 use autoclicker_evdev.py instead (requires root/uinput permissions).
 """
-import tkinter as tk
-from tkinter import ttk, messagebox
+
+from __future__ import annotations
+
+import json
+import os
+import platform
+import sys
+import tempfile
 import threading
 import time
-import json
-import sys
-import os
 from pathlib import Path
+
+from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal, QObject
+from PyQt6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QIcon,
+    QKeyEvent,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
-__version__ = "1.10"
+# ── App identity ──────────────────────────────────────────────────────
+APP_NAME = "AutoClicker"
+__version__ = "1.11"
+VERSION = __version__
+WINDOW_SIZE = (560, 820)
 
-# Update Constants
+# ── Color palette ─────────────────────────────────────────────────────
+GREEN = ("#2e7d32", "#388e3c")
+BLUE = ("#1565c0", "#1976d2")
+YELLOW = ("#f9a825", "#fbc02d")
+RED = ("#c62828", "#e53935")
+
+# ── Update Constants ──────────────────────────────────────────────────
 GITHUB_REPO = "jj-repository/autoclicker"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}"
 
-# Constants
-MIN_INTERVAL = 0.01  # Minimum interval: 10ms (100 clicks/sec max)
-MAX_INTERVAL = 60.0  # Maximum interval: 60 seconds
+# ── Interval Constants ────────────────────────────────────────────────
+MIN_INTERVAL = 0.01
+MAX_INTERVAL = 60.0
 DEFAULT_CLICKER1_INTERVAL = 0.1
 DEFAULT_CLICKER2_INTERVAL = 0.5
 DEFAULT_KEYPRESSER_INTERVAL = 0.1
-MAX_DOWNLOAD_SIZE = 5 * 1024 * 1024  # 5MB max download size for updates
+MAX_DOWNLOAD_SIZE = 5 * 1024 * 1024
 
 
-class DualAutoClicker:
-    # Color schemes
-    THEMES = {
-        'dark': {
-            'bg': '#1e1e1e', 'fg': '#d4d4d4', 'accent': '#264f78',
-            'entry_bg': '#2d2d2d', 'entry_fg': '#d4d4d4', 'button_bg': '#3c3c3c',
-            'green': '#4ec9b0', 'red': '#f44747', 'orange': '#ce9178',
-            'sep': '#404040', 'link': '#3794ff', 'muted': '#808080',
-        },
-        'light': {
-            'bg': '#f0f0f0', 'fg': '#1e1e1e', 'accent': '#0078d4',
-            'entry_bg': '#ffffff', 'entry_fg': '#1e1e1e', 'button_bg': '#e1e1e1',
-            'green': '#16825d', 'red': '#cd3131', 'orange': '#c17e00',
-            'sep': '#c8c8c8', 'link': '#0066cc', 'muted': '#6e6e6e',
-        },
-    }
+# ── Stylesheets ───────────────────────────────────────────────────────
 
-    @property
-    def _t(self):
-        """Current theme colors."""
-        return self.THEMES['dark' if self.dark_mode else 'light']
+_LIGHT_STYLE = """
+QWidget { background-color: #f0f0f0; color: #1e1e1e; }
+QGroupBox { border: 1px solid #bbb; border-radius: 4px; margin-top: 8px; padding-top: 14px; }
+QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #1e1e1e; }
+QTabWidget::pane { border: 1px solid #bbb; }
+QTabBar::tab { background: #e0e0e0; padding: 6px 14px; border: 1px solid #bbb;
+               border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }
+QTabBar::tab:selected { background: #f0f0f0; }
+QTabBar::tab:!selected { margin-top: 2px; }
+QTabBar::tab:disabled { background: transparent; border: none; min-width: 40px; max-width: 40px; }
+QLineEdit { background: #ffffff; color: #1e1e1e;
+            border: 1px solid #bbb; border-radius: 3px; padding: 2px; }
+QScrollArea { border: none; }
+QPushButton { background: #e0e0e0; color: #1e1e1e; border: 1px solid #bbb;
+              border-radius: 3px; padding: 5px 12px; }
+QPushButton:hover { background: #d0d0d0; }
+QCheckBox { color: #1e1e1e; }
+QCheckBox::indicator { width: 14px; height: 14px; border: 2px solid #888;
+                       border-radius: 3px; background: #ffffff; }
+QCheckBox::indicator:checked { background: #2e7d32; border-color: #2e7d32; }
+QCheckBox::indicator:unchecked:hover { border-color: #555; }
+QLabel { color: #1e1e1e; }
+QMessageBox { background-color: #f0f0f0; }
+QToolTip { background: #ffffcc; color: #1e1e1e; border: 1px solid #bbb; }
+"""
+
+
+def _make_checkbox_images() -> tuple[str, str]:
+    """Generate dark-mode checked/unchecked checkbox PNGs."""
+    d = tempfile.mkdtemp(prefix=f"{APP_NAME.lower()}_")
+    size = 18
+
+    unchecked = QPixmap(size, size)
+    unchecked.fill(QColor(0, 0, 0, 0))
+    p = QPainter(unchecked)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(QPen(QColor(136, 136, 136), 2))
+    p.setBrush(QColor(45, 45, 45))
+    p.drawRoundedRect(1, 1, size - 2, size - 2, 3, 3)
+    p.end()
+    unchecked_path = os.path.join(d, "cb_unchecked.png")
+    unchecked.save(unchecked_path)
+
+    checked = QPixmap(size, size)
+    checked.fill(QColor(0, 0, 0, 0))
+    p = QPainter(checked)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(46, 125, 50))
+    p.drawRoundedRect(1, 1, size - 2, size - 2, 3, 3)
+    pen = QPen(QColor(255, 255, 255), 2.5)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    path = QPainterPath()
+    path.moveTo(4, 9)
+    path.lineTo(7.5, 13)
+    path.lineTo(14, 5)
+    p.drawPath(path)
+    p.end()
+    checked_path = os.path.join(d, "cb_checked.png")
+    checked.save(checked_path)
+
+    return checked_path, unchecked_path
+
+
+def _build_dark_style() -> str:
+    """Build dark stylesheet with generated checkbox images."""
+    checked, unchecked = _make_checkbox_images()
+    checked = checked.replace("\\", "/")
+    unchecked = unchecked.replace("\\", "/")
+    return f"""
+QWidget {{ background-color: #1e1e1e; color: #dcdcdc; }}
+QGroupBox {{ border: 1px solid #444; border-radius: 4px; margin-top: 8px; padding-top: 14px; }}
+QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #dcdcdc; }}
+QTabWidget::pane {{ border: 1px solid #444; }}
+QTabBar::tab {{ background: #2d2d2d; padding: 6px 14px; border: 1px solid #444;
+               border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }}
+QTabBar::tab:selected {{ background: #1e1e1e; }}
+QTabBar::tab:!selected {{ margin-top: 2px; }}
+QTabBar::tab:disabled {{ background: transparent; border: none; min-width: 40px; max-width: 40px; }}
+QLineEdit {{ background: #2d2d2d; color: #dcdcdc;
+            border: 1px solid #555; border-radius: 3px; padding: 2px; }}
+QScrollArea {{ border: none; }}
+QPushButton {{ background: #333; color: #dcdcdc; border: 1px solid #555;
+              border-radius: 3px; padding: 5px 12px; }}
+QPushButton:hover {{ background: #444; }}
+QCheckBox {{ color: #dcdcdc; spacing: 6px; }}
+QCheckBox::indicator {{ width: 18px; height: 18px; }}
+QCheckBox::indicator:unchecked {{ image: url({unchecked}); }}
+QCheckBox::indicator:checked {{ image: url({checked}); }}
+QLabel {{ color: #dcdcdc; }}
+QMessageBox {{ background-color: #1e1e1e; }}
+QToolTip {{ background: #2d2d2d; color: #dcdcdc; border: 1px solid #555; }}
+"""
+
+
+# ── App settings persistence (dark mode) ─────────────────────────────
+
+
+def _settings_path() -> Path:
+    if platform.system() == "Windows":
+        base = Path(os.environ.get("APPDATA", Path.home()))
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return base / APP_NAME.lower() / "settings.json"
+
+
+def _load_settings() -> dict:
+    p = _settings_path()
+    if p.is_file():
+        try:
+            return json.loads(p.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _save_settings(data: dict):
+    p = _settings_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2))
+
+
+# ── Window icon ───────────────────────────────────────────────────────
+
+
+def _make_icon() -> QIcon:
+    base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    for name in ("icon.ico", "icon.png"):
+        p = base_dir / name
+        if p.exists():
+            return QIcon(str(p))
+    px = QPixmap(64, 64)
+    px.fill(QColor(46, 125, 50))
+    p = QPainter(px)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(255, 255, 255))
+    p.drawRoundedRect(16, 16, 32, 32, 6, 6)
+    p.end()
+    return QIcon(px)
+
+
+# ── Colored button helper ─────────────────────────────────────────────
+
+
+def _colored_btn(
+    text: str, colors: tuple[str, str], bold: bool = True, text_color: str = "white"
+) -> QPushButton:
+    btn = QPushButton(text)
+    weight = "bold" if bold else "normal"
+    btn.setStyleSheet(
+        f"QPushButton {{ background-color: {colors[0]}; color: {text_color};"
+        f" font-weight: {weight}; }}"
+        f"QPushButton:hover {{ background-color: {colors[1]}; }}"
+    )
+    return btn
+
+
+# ── Thread-safe UI updater ────────────────────────────────────────────
+
+
+class _UiUpdater(QObject):
+    """Emit from any thread; slot runs on main thread."""
+
+    requested = pyqtSignal(object)
 
     def __init__(self):
-        self.window = tk.Tk()
-        self.window.title("AutoClicker")
-        self.window.geometry("540x820")
-        self.window.minsize(480, 500)
+        super().__init__()
+        self.requested.connect(self._run)
 
-        # Theme state
-        self.dark_mode = True
-        self.style = ttk.Style()
-        self.style.theme_use('clam')
-        self._apply_theme()
-
-        # Load bundled assets (PyInstaller: sys._MEIPASS; dev: script dir)
-        base_dir = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
-
-        # Set window icon
+    @staticmethod
+    def _run(fn):
         try:
-            if sys.platform == 'win32':
-                ico_path = base_dir / 'icon.ico'
-                if ico_path.exists():
-                    self.window.iconbitmap(str(ico_path))
-            else:
-                png_path = base_dir / 'icon.png'
-                if png_path.exists():
-                    self._window_icon = tk.PhotoImage(file=str(png_path))
-                    self.window.iconphoto(True, self._window_icon)
-        except Exception:
-            pass
+            fn()
+        except RuntimeError:
+            pass  # Widget already deleted
 
-        # Load takodachi image for About dialog
-        self._about_image = None
-        try:
-            img_path = base_dir / "takodachi.png"
-            if img_path.exists():
-                self._about_image = tk.PhotoImage(file=str(img_path))
-        except Exception:
-            pass
 
-        # Config file path
-        if sys.platform == 'win32':
-            appdata = os.environ.get('APPDATA', str(Path.home()))
-            self.config_path = Path(appdata) / "autoclicker" / "config.json"
-        else:
-            self.config_path = Path.home() / ".config" / "autoclicker" / "config.json"
+# ── Key capture dialog (for selecting key-presser target) ─────────────
 
-        # Thread locks for thread-safe state access
+
+class KeyCaptureDialog(QDialog):
+    """Modal dialog that captures a single key press."""
+
+    _SPECIAL_MAP: dict = {
+        Qt.Key.Key_Space: (Key.space, "Space"),
+        Qt.Key.Key_Return: (Key.enter, "Enter"),
+        Qt.Key.Key_Enter: (Key.enter, "Enter"),
+        Qt.Key.Key_Tab: (Key.tab, "Tab"),
+        Qt.Key.Key_Escape: (Key.esc, "Escape"),
+        Qt.Key.Key_Backspace: (Key.backspace, "Backspace"),
+        Qt.Key.Key_Delete: (Key.delete, "Delete"),
+        Qt.Key.Key_Up: (Key.up, "Up"),
+        Qt.Key.Key_Down: (Key.down, "Down"),
+        Qt.Key.Key_Left: (Key.left, "Left"),
+        Qt.Key.Key_Right: (Key.right, "Right"),
+        Qt.Key.Key_Home: (Key.home, "Home"),
+        Qt.Key.Key_End: (Key.end, "End"),
+        Qt.Key.Key_PageUp: (Key.page_up, "PageUp"),
+        Qt.Key.Key_PageDown: (Key.page_down, "PageDown"),
+        Qt.Key.Key_Insert: (Key.insert, "Insert"),
+        Qt.Key.Key_Shift: (Key.shift_l, "Shift"),
+        Qt.Key.Key_Control: (Key.ctrl_l, "Ctrl"),
+        Qt.Key.Key_Alt: (Key.alt_l, "Alt"),
+    }
+    for _i in range(1, 13):
+        _SPECIAL_MAP[getattr(Qt.Key, f"Key_F{_i}")] = (getattr(Key, f"f{_i}"), f"F{_i}")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Key to Press")
+        self.setFixedSize(300, 150)
+        self.setModal(True)
+        self.captured_key = None
+        self.captured_display = None
+
+        layout = QVBoxLayout(self)
+        layout.addStretch()
+        lbl = QLabel("Press any key...")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet("font-size: 14px;")
+        layout.addWidget(lbl)
+        layout.addStretch()
+
+    def keyPressEvent(self, event: QKeyEvent):
+        qt_key = event.key()
+        text = event.text()
+
+        if qt_key in self._SPECIAL_MAP:
+            self.captured_key, self.captured_display = self._SPECIAL_MAP[qt_key]
+            self.accept()
+            return
+
+        if text and len(text) == 1:
+            try:
+                self.captured_key = KeyCode.from_char(text.lower())
+                self.captured_display = text.upper()
+                self.accept()
+                return
+            except Exception:
+                pass
+
+        QMessageBox.warning(
+            self,
+            "Unsupported Key",
+            "This key is not supported.\n\n"
+            "Please choose a letter, number, function key, "
+            "or a recognized special key.",
+        )
+        self.reject()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Main Window
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class AppWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(f"{APP_NAME} v{VERSION}")
+        self.setWindowIcon(_make_icon())
+        self.resize(*WINDOW_SIZE)
+        self.setMinimumSize(480, 500)
+
+        # Thread-safe UI updater
+        self._ui_updater = _UiUpdater()
+
+        # ── Autoclicker state ─────────────────────────────────
         self.clicker1_lock = threading.Lock()
         self.clicker2_lock = threading.Lock()
         self.keypresser_lock = threading.Lock()
         self.hotkey_capture_lock = threading.Lock()
 
-        # Clicker 1 state (defaults)
+        # Clicker 1
         self.clicker1_hotkey = Key.f6
         self.clicker1_hotkey_display = "F6"
         self.clicker1_interval = DEFAULT_CLICKER1_INTERVAL
         self.clicker1_clicking = False
         self.clicker1_thread = None
 
-        # Clicker 2 state (defaults)
+        # Clicker 2
         self.clicker2_hotkey = Key.f7
         self.clicker2_hotkey_display = "F7"
         self.clicker2_interval = DEFAULT_CLICKER2_INTERVAL
         self.clicker2_clicking = False
         self.clicker2_thread = None
 
-        # Keyboard Key Presser state (defaults)
+        # Key Presser
         self.keypresser_hotkey = Key.f8
         self.keypresser_hotkey_display = "F8"
         self.keypresser_interval = DEFAULT_KEYPRESSER_INTERVAL
-        self.keypresser_target_key = Key.space  # Default to spacebar
+        self.keypresser_target_key = Key.space
         self.keypresser_target_key_display = "Space"
         self.keypresser_pressing = False
         self.keypresser_thread = None
 
-        # Emergency Stop hotkey (defaults)
+        # Emergency Stop
         self.emergency_stop_hotkey = Key.f9
         self.emergency_stop_hotkey_display = "F9"
 
-        # Shared state
-        self.mouse_controller = mouse.Controller()  # pynput mouse controller
-        self.keyboard_controller = keyboard.Controller()  # pynput keyboard controller
+        # Controllers
+        self.mouse_controller = mouse.Controller()
+        self.keyboard_controller = keyboard.Controller()
         self.keyboard_listener = None
         self.hotkey_capture_listener = None
         self.listening_for_hotkey = False
-        self.hotkey_target = None  # "clicker1", "clicker2", "keypresser", or "emergency_stop"
+        self.hotkey_target = None
 
-        # Rate limiting for hotkey presses (thread-safe)
-        self.last_hotkey_time = {}
+        # Rate limiting
+        self.last_hotkey_time: dict = {}
         self.hotkey_timing_lock = threading.Lock()
-        self.hotkey_cooldown = 0.2  # 200ms cooldown between hotkey presses
+        self.hotkey_cooldown = 0.2
 
         # Update settings
-        self.auto_check_updates = True  # Default: check for updates on startup
+        self.auto_check_updates = True
 
-        # UI elements
-        self.interval1_var = None
-        self.interval2_var = None
-        self.hotkey1_button = None
-        self.hotkey2_button = None
-        self.status1_var = None
-        self.status2_var = None
-        self.keypresser_interval_var = None
-        self.keypresser_hotkey_button = None
-        self.keypresser_target_key_button = None
-        self.keypresser_status_var = None
-        self.emergency_stop_button = None
+        # Load saved config (populates state from disk before building UI)
+        self._load_config()
 
-        # Load saved configuration
-        self.load_config()
+        # ── Build UI ──────────────────────────────────────────
+        central = QWidget()
+        outer = QVBoxLayout(central)
 
-        self.setup_ui()
-        self.start_keyboard_listener()
+        self._tabs = QTabWidget()
+        self._build_main_tab()
 
-        self.window.protocol("WM_DELETE_WINDOW", self.on_closing)
+        # Spacer tab (visual gap before Settings / Help)
+        self._tabs.addTab(QWidget(), "")
+        spacer_idx = self._tabs.count() - 1
+        self._tabs.setTabEnabled(spacer_idx, False)
+        bar = self._tabs.tabBar()
+        bar.setTabButton(spacer_idx, bar.ButtonPosition.LeftSide, None)
+        bar.setTabButton(spacer_idx, bar.ButtonPosition.RightSide, None)
 
-        # Check for updates on startup (delay to let UI initialize)
-        if self.auto_check_updates:
-            self.window.after(2000, lambda: threading.Thread(
-                target=self._check_for_updates, args=(True,), daemon=True).start())
+        self._build_settings_tab()
+        self._build_help_tab()
 
-    def _apply_theme(self):
-        """Apply current theme to all widgets."""
-        t = self._t
-        self.window.configure(bg=t['bg'])
-        self.style.configure('.', background=t['bg'], foreground=t['fg'],
-                             fieldbackground=t['entry_bg'], borderwidth=0)
-        self.style.configure('TFrame', background=t['bg'])
-        self.style.configure('TLabel', background=t['bg'], foreground=t['fg'])
-        self.style.configure('TButton', background=t['button_bg'], foreground=t['fg'], padding=(8, 4))
-        self.style.map('TButton', background=[('active', t['accent'])])
-        self.style.configure('TEntry', fieldbackground=t['entry_bg'], foreground=t['entry_fg'])
-        self.style.configure('TCheckbutton', background=t['bg'], foreground=t['fg'])
-        self.style.configure('TSeparator', background=t['sep'])
+        outer.addWidget(self._tabs)
+        self.setCentralWidget(central)
 
-        # Update tk.Label status widgets if they exist
-        for label_attr, is_active_attr in [
-            ('status1_label', 'clicker1_clicking'),
-            ('status2_label', 'clicker2_clicking'),
-            ('keypresser_status_label', 'keypresser_pressing'),
-        ]:
-            label = getattr(self, label_attr, None)
-            if label:
-                active = getattr(self, is_active_attr, False)
-                label.config(bg=t['bg'], fg=t['red'] if active else t['green'])
-
-    def _toggle_theme(self):
-        """Toggle between dark and light mode."""
-        self.dark_mode = not self.dark_mode
+        # Apply theme (needs _dark_mode_cb created by _build_settings_tab)
         self._apply_theme()
 
+        # Start keyboard listener
+        self.start_keyboard_listener()
+
+        # Auto-check updates on startup
+        if self.auto_check_updates:
+            QTimer.singleShot(
+                2000,
+                lambda: threading.Thread(
+                    target=self._check_for_updates, args=(True,), daemon=True
+                ).start(),
+            )
+
+    # ── Thread-safe UI scheduling ─────────────────────────────
+
     def _safe_after(self, delay_ms, callback):
-        """
-        Safely schedule a callback on the main thread.
-        Prevents crashes if window is destroyed before callback runs.
-        """
+        """Schedule callback on the main thread (thread-safe)."""
         try:
-            if self.window and self.window.winfo_exists():
-                self.window.after(delay_ms, callback)
-        except tk.TclError:
-            # Window was destroyed, ignore the callback
+            if delay_ms <= 0:
+                self._ui_updater.requested.emit(callback)
+            else:
+                self._ui_updater.requested.emit(
+                    lambda: QTimer.singleShot(delay_ms, callback)
+                )
+        except RuntimeError:
             pass
 
-    def _validate_interval(self, interval, default):
-        """Validate interval is within acceptable bounds"""
-        try:
-            interval_float = float(interval)
-            if MIN_INTERVAL <= interval_float <= MAX_INTERVAL:
-                return interval_float
-        except (ValueError, TypeError):
-            pass
-        return default
+    # ── Scrollable tab helper ─────────────────────────────────
 
-    def load_config(self):
-        """Load saved configuration from JSON file"""
-        if not self.config_path.exists():
+    @staticmethod
+    def _scroll_tab(page: QWidget) -> QScrollArea:
+        sa = QScrollArea()
+        sa.setWidget(page)
+        sa.setWidgetResizable(True)
+        sa.setFrameShape(QScrollArea.Shape.NoFrame)
+        return sa
+
+    # ══════════════════════════════════════════════════════════════
+    #  Main Tab
+    # ══════════════════════════════════════════════════════════════
+
+    def _build_main_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        # Title
+        title = QLabel("Dual AutoClicker + Key Presser")
+        title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+        layout.addSpacing(12)
+
+        # ── Clickers side by side ─────────────────────────────
+        clickers_row = QHBoxLayout()
+
+        # Clicker 1
+        c1_group = QGroupBox("Clicker 1")
+        c1 = QVBoxLayout()
+        c1.addWidget(QLabel("Interval (seconds):"))
+        c1_int = QHBoxLayout()
+        self._interval1_edit = QLineEdit(str(self.clicker1_interval))
+        self._interval1_edit.setFixedWidth(100)
+        c1_int.addWidget(self._interval1_edit)
+        c1_apply = QPushButton("Apply")
+        c1_apply.clicked.connect(self._apply_interval1)
+        c1_int.addWidget(c1_apply)
+        c1_int.addStretch()
+        c1.addLayout(c1_int)
+        c1.addSpacing(8)
+        c1.addWidget(QLabel("Toggle Hotkey:"))
+        self._hotkey1_btn = QPushButton(f"Current: {self.clicker1_hotkey_display}")
+        self._hotkey1_btn.clicked.connect(lambda: self.start_hotkey_capture("clicker1"))
+        c1.addWidget(self._hotkey1_btn)
+        c1.addSpacing(8)
+        c1.addWidget(QLabel("Status:"))
+        self._status1_label = QLabel("Idle")
+        self._status1_label.setStyleSheet("font-weight: bold; color: #4ec9b0;")
+        c1.addWidget(self._status1_label)
+        c1.addStretch()
+        c1_group.setLayout(c1)
+        clickers_row.addWidget(c1_group)
+
+        # Clicker 2
+        c2_group = QGroupBox("Clicker 2")
+        c2 = QVBoxLayout()
+        c2.addWidget(QLabel("Interval (seconds):"))
+        c2_int = QHBoxLayout()
+        self._interval2_edit = QLineEdit(str(self.clicker2_interval))
+        self._interval2_edit.setFixedWidth(100)
+        c2_int.addWidget(self._interval2_edit)
+        c2_apply = QPushButton("Apply")
+        c2_apply.clicked.connect(self._apply_interval2)
+        c2_int.addWidget(c2_apply)
+        c2_int.addStretch()
+        c2.addLayout(c2_int)
+        c2.addSpacing(8)
+        c2.addWidget(QLabel("Toggle Hotkey:"))
+        self._hotkey2_btn = QPushButton(f"Current: {self.clicker2_hotkey_display}")
+        self._hotkey2_btn.clicked.connect(lambda: self.start_hotkey_capture("clicker2"))
+        c2.addWidget(self._hotkey2_btn)
+        c2.addSpacing(8)
+        c2.addWidget(QLabel("Status:"))
+        self._status2_label = QLabel("Idle")
+        self._status2_label.setStyleSheet("font-weight: bold; color: #4ec9b0;")
+        c2.addWidget(self._status2_label)
+        c2.addStretch()
+        c2_group.setLayout(c2)
+        clickers_row.addWidget(c2_group)
+
+        layout.addLayout(clickers_row)
+
+        # ── Emergency Stop ────────────────────────────────────
+        emerg_group = QGroupBox("Emergency Stop All")
+        emerg_group.setStyleSheet(
+            "QGroupBox { border-color: #c62828; }"
+            "QGroupBox::title { color: #e53935; font-weight: bold; }"
+        )
+        emerg = QHBoxLayout()
+        emerg.addWidget(QLabel("Hotkey:"))
+        self._emergency_stop_btn = QPushButton(
+            f"Current: {self.emergency_stop_hotkey_display}"
+        )
+        self._emergency_stop_btn.clicked.connect(
+            lambda: self.start_hotkey_capture("emergency_stop")
+        )
+        emerg.addWidget(self._emergency_stop_btn)
+        emerg.addStretch()
+        emerg_group.setLayout(emerg)
+        layout.addWidget(emerg_group)
+
+        # ── Keyboard Key Presser ──────────────────────────────
+        kp_group = QGroupBox("Keyboard Key Presser")
+        kp_cols = QHBoxLayout()
+
+        # Left column
+        kp_left = QVBoxLayout()
+        kp_left.addWidget(QLabel("Key to Press:"))
+        self._kp_target_btn = QPushButton(
+            f"Current: {self.keypresser_target_key_display}"
+        )
+        self._kp_target_btn.clicked.connect(self._select_target_key)
+        kp_left.addWidget(self._kp_target_btn)
+        kp_left.addSpacing(8)
+        kp_left.addWidget(QLabel("Interval (seconds):"))
+        kp_int = QHBoxLayout()
+        self._kp_interval_edit = QLineEdit(str(self.keypresser_interval))
+        self._kp_interval_edit.setFixedWidth(100)
+        kp_int.addWidget(self._kp_interval_edit)
+        kp_apply = QPushButton("Apply")
+        kp_apply.clicked.connect(self._apply_keypresser_interval)
+        kp_int.addWidget(kp_apply)
+        kp_int.addStretch()
+        kp_left.addLayout(kp_int)
+        kp_left.addStretch()
+        kp_cols.addLayout(kp_left)
+
+        # Right column
+        kp_right = QVBoxLayout()
+        kp_right.addWidget(QLabel("Toggle Hotkey:"))
+        self._kp_hotkey_btn = QPushButton(f"Current: {self.keypresser_hotkey_display}")
+        self._kp_hotkey_btn.clicked.connect(
+            lambda: self.start_hotkey_capture("keypresser")
+        )
+        kp_right.addWidget(self._kp_hotkey_btn)
+        kp_right.addSpacing(8)
+        kp_right.addWidget(QLabel("Status:"))
+        self._kp_status_label = QLabel("Idle")
+        self._kp_status_label.setStyleSheet("font-weight: bold; color: #4ec9b0;")
+        kp_right.addWidget(self._kp_status_label)
+        kp_right.addStretch()
+        kp_cols.addLayout(kp_right)
+
+        kp_group.setLayout(kp_cols)
+        layout.addWidget(kp_group)
+
+        # ── Instructions ──────────────────────────────────────
+        instructions = QLabel(
+            "Mouse clickers stop each other when started. "
+            "Keyboard presser is independent.\n"
+            "Emergency Stop will stop everything at once."
+        )
+        instructions.setWordWrap(True)
+        instructions.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        instructions.setStyleSheet("color: gray; font-style: italic; font-size: 11px;")
+        layout.addWidget(instructions)
+
+        layout.addStretch()
+        self._tabs.addTab(self._scroll_tab(page), "AutoClicker")
+
+    # ══════════════════════════════════════════════════════════════
+    #  Settings Tab
+    # ══════════════════════════════════════════════════════════════
+
+    def _build_settings_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        # Repo link
+        repo_label = QLabel(
+            f'<a href="https://github.com/{GITHUB_REPO}">github.com/{GITHUB_REPO}</a>'
+        )
+        repo_label.setOpenExternalLinks(True)
+        repo_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(repo_label)
+        layout.addSpacing(12)
+
+        # Check for Updates button
+        update_btn = QPushButton("Check for Updates")
+        update_btn.setToolTip("Check GitHub for a new version")
+        update_btn.clicked.connect(self._check_for_updates_clicked)
+        layout.addWidget(update_btn)
+        layout.addSpacing(8)
+
+        # Auto-check updates
+        self._auto_update_cb = QCheckBox("Check for Updates on Startup")
+        self._auto_update_cb.setChecked(self.auto_check_updates)
+        self._auto_update_cb.stateChanged.connect(self._toggle_auto_check_updates)
+        layout.addWidget(self._auto_update_cb)
+        layout.addSpacing(12)
+
+        # Dark mode toggle
+        self._dark_mode_cb = QCheckBox("Dark Mode")
+        self._dark_mode_cb.setChecked(_load_settings().get("dark_mode", True))
+        self._dark_mode_cb.stateChanged.connect(self._on_dark_mode_toggled)
+        layout.addWidget(self._dark_mode_cb)
+
+        # Mascot
+        layout.addSpacing(16)
+        base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+        tako_path = base_dir / "takodachi.png"
+        if tako_path.exists():
+            tako_pix = QPixmap(str(tako_path))
+            if not tako_pix.isNull():
+                tako_pix = tako_pix.scaled(
+                    120,
+                    120,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                tako_label = QLabel()
+                tako_label.setPixmap(tako_pix)
+                tako_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                layout.addWidget(tako_label)
+
+        by_label = QLabel("by JJ")
+        by_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        by_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(by_label)
+
+        layout.addStretch()
+        self._tabs.addTab(self._scroll_tab(page), "Settings")
+
+    # ══════════════════════════════════════════════════════════════
+    #  Help Tab
+    # ══════════════════════════════════════════════════════════════
+
+    def _build_help_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        title = QLabel(f"{APP_NAME} Help")
+        title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        layout.addWidget(title)
+        layout.addSpacing(8)
+
+        # Action buttons
+        btns = QHBoxLayout()
+        readme_btn = _colored_btn("Readme", BLUE)
+        readme_btn.setToolTip("Open documentation on GitHub")
+        readme_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(
+                QUrl(f"https://github.com/{GITHUB_REPO}#readme")
+            )
+        )
+        btns.addWidget(readme_btn)
+
+        report_btn = _colored_btn("Report Bug", YELLOW, text_color="#1e1e1e")
+        report_btn.setToolTip("Report an issue on GitHub")
+        report_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(
+                QUrl(f"https://github.com/{GITHUB_REPO}/issues/new")
+            )
+        )
+        btns.addWidget(report_btn)
+
+        logs_btn = QPushButton("Open Logs Folder")
+        logs_btn.clicked.connect(self._open_logs_folder)
+        btns.addWidget(logs_btn)
+
+        btns.addStretch()
+        layout.addLayout(btns)
+        layout.addSpacing(12)
+
+        # Separator
+        sep = QLabel()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background-color: #444;")
+        layout.addWidget(sep)
+        layout.addSpacing(8)
+
+        # Help sections
+        help_sections = [
+            (
+                "Getting Started",
+                "AutoClicker provides two independent mouse clickers and a "
+                "keyboard key presser. Each can be toggled on/off via "
+                "configurable global hotkeys.",
+            ),
+            (
+                "Mouse Clickers",
+                "Clicker 1 and Clicker 2 click the left mouse button at the "
+                "configured interval. Starting one automatically stops the other. "
+                "Set the interval in seconds and click Apply, or change the "
+                "toggle hotkey.",
+            ),
+            (
+                "Keyboard Key Presser",
+                "Automatically presses a selected keyboard key at the configured "
+                "interval. Click the 'Key to Press' button and press the desired "
+                "key. The presser runs independently from the mouse clickers.",
+            ),
+            (
+                "Emergency Stop",
+                "Press the Emergency Stop hotkey to immediately stop all "
+                "clickers and the key presser.",
+            ),
+            (
+                "Hotkeys",
+                "Default hotkeys:\n"
+                "  F6 — Toggle Clicker 1\n"
+                "  F7 — Toggle Clicker 2\n"
+                "  F8 — Toggle Key Presser\n"
+                "  F9 — Emergency Stop All\n\n"
+                "Click any hotkey button in the main tab and press a new key "
+                "to rebind.",
+            ),
+            (
+                "Settings",
+                "Toggle dark/light mode, enable or disable automatic update "
+                "checks on startup, and check for updates manually.",
+            ),
+        ]
+        for sec_title, sec_desc in help_sections:
+            t_lbl = QLabel(sec_title)
+            t_lbl.setStyleSheet("font-size: 13px; font-weight: bold;")
+            layout.addWidget(t_lbl)
+            d_lbl = QLabel(sec_desc)
+            d_lbl.setWordWrap(True)
+            d_lbl.setStyleSheet("color: gray; font-size: 11px; margin-left: 8px;")
+            layout.addWidget(d_lbl)
+            layout.addSpacing(6)
+
+        layout.addStretch()
+        self._tabs.addTab(self._scroll_tab(page), "Help")
+
+    # ══════════════════════════════════════════════════════════════
+    #  Theme
+    # ══════════════════════════════════════════════════════════════
+
+    def _on_dark_mode_toggled(self, _state):
+        data = _load_settings()
+        data["dark_mode"] = self._dark_mode_cb.isChecked()
+        _save_settings(data)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        if self._dark_mode_cb.isChecked():
+            if not hasattr(self, "_dark_style_cache"):
+                self._dark_style_cache = _build_dark_style()
+            QApplication.instance().setStyleSheet(self._dark_style_cache)
+        else:
+            QApplication.instance().setStyleSheet(_LIGHT_STYLE)
+
+    # ══════════════════════════════════════════════════════════════
+    #  Config load / save
+    # ══════════════════════════════════════════════════════════════
+
+    @property
+    def _config_path(self) -> Path:
+        if sys.platform == "win32":
+            appdata = os.environ.get("APPDATA", str(Path.home()))
+            return Path(appdata) / "autoclicker" / "config.json"
+        return Path.home() / ".config" / "autoclicker" / "config.json"
+
+    def _load_config(self):
+        """Load saved configuration from JSON file."""
+        if not self._config_path.exists():
+            return
+        try:
+            config = json.loads(self._config_path.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Error loading config: {e}")
             return
 
+        self.clicker1_interval = self._validate_interval(
+            config.get("clicker1_interval"), DEFAULT_CLICKER1_INTERVAL
+        )
+        self.clicker2_interval = self._validate_interval(
+            config.get("clicker2_interval"), DEFAULT_CLICKER2_INTERVAL
+        )
+
+        if "clicker1_hotkey" in config:
+            self.clicker1_hotkey = self._deserialize_key(config["clicker1_hotkey"])
+            d = config.get("clicker1_hotkey_display", "F6")
+            self.clicker1_hotkey_display = d if isinstance(d, str) else "F6"
+        if "clicker2_hotkey" in config:
+            self.clicker2_hotkey = self._deserialize_key(config["clicker2_hotkey"])
+            d = config.get("clicker2_hotkey_display", "F7")
+            self.clicker2_hotkey_display = d if isinstance(d, str) else "F7"
+
+        self.keypresser_interval = self._validate_interval(
+            config.get("keypresser_interval"), DEFAULT_KEYPRESSER_INTERVAL
+        )
+        if "keypresser_hotkey" in config:
+            self.keypresser_hotkey = self._deserialize_key(config["keypresser_hotkey"])
+            self.keypresser_hotkey_display = config.get(
+                "keypresser_hotkey_display", "F8"
+            )
+        if "keypresser_target_key_pynput" in config:
+            self.keypresser_target_key = self._deserialize_key(
+                config["keypresser_target_key_pynput"]
+            )
+            self.keypresser_target_key_display = config.get(
+                "keypresser_target_key_display", "Space"
+            )
+
+        if "emergency_stop_hotkey" in config:
+            self.emergency_stop_hotkey = self._deserialize_key(
+                config["emergency_stop_hotkey"]
+            )
+            self.emergency_stop_hotkey_display = config.get(
+                "emergency_stop_hotkey_display", "F9"
+            )
+
+        if "auto_check_updates" in config:
+            self.auto_check_updates = bool(config.get("auto_check_updates", True))
+
+        # Restore window geometry (supports old tkinter format + new dict)
+        geo = config.get("window_geometry")
+        if isinstance(geo, str) and "x" in geo:
+            parts = geo.replace("+", "x").split("x")
+            try:
+                if len(parts) >= 2:
+                    self.resize(int(parts[0]), int(parts[1]))
+                if len(parts) >= 4:
+                    self.move(int(parts[2]), int(parts[3]))
+            except (ValueError, IndexError):
+                pass
+        elif isinstance(geo, dict):
+            self.resize(geo.get("w", WINDOW_SIZE[0]), geo.get("h", WINDOW_SIZE[1]))
+            if "x" in geo and "y" in geo:
+                self.move(geo["x"], geo["y"])
+
+    def _save_config(self):
+        """Save current configuration to JSON file, merging with existing."""
         try:
-            with open(self.config_path, 'r') as f:
-                config = json.load(f)
+            self._config_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Load and validate intervals
-            self.clicker1_interval = self._validate_interval(
-                config.get('clicker1_interval', self.clicker1_interval),
-                DEFAULT_CLICKER1_INTERVAL
-            )
-            self.clicker2_interval = self._validate_interval(
-                config.get('clicker2_interval', self.clicker2_interval),
-                DEFAULT_CLICKER2_INTERVAL
-            )
-
-            # Load hotkeys with type validation
-            if 'clicker1_hotkey' in config:
-                self.clicker1_hotkey = self._deserialize_key(config['clicker1_hotkey'])
-                display = config.get('clicker1_hotkey_display', 'F6')
-                self.clicker1_hotkey_display = display if isinstance(display, str) else 'F6'
-
-            if 'clicker2_hotkey' in config:
-                self.clicker2_hotkey = self._deserialize_key(config['clicker2_hotkey'])
-                display = config.get('clicker2_hotkey_display', 'F7')
-                self.clicker2_hotkey_display = display if isinstance(display, str) else 'F7'
-
-            # Load keypresser settings
-            self.keypresser_interval = self._validate_interval(
-                config.get('keypresser_interval', self.keypresser_interval),
-                DEFAULT_KEYPRESSER_INTERVAL
-            )
-
-            if 'keypresser_hotkey' in config:
-                self.keypresser_hotkey = self._deserialize_key(config['keypresser_hotkey'])
-                self.keypresser_hotkey_display = config.get('keypresser_hotkey_display', 'F8')
-
-            if 'keypresser_target_key_pynput' in config:
-                self.keypresser_target_key = self._deserialize_key(config['keypresser_target_key_pynput'])
-                self.keypresser_target_key_display = config.get('keypresser_target_key_display', 'Space')
-
-            # Load emergency stop hotkey
-            if 'emergency_stop_hotkey' in config:
-                self.emergency_stop_hotkey = self._deserialize_key(config['emergency_stop_hotkey'])
-                self.emergency_stop_hotkey_display = config.get('emergency_stop_hotkey_display', 'F9')
-
-            # Load auto update setting
-            if 'auto_check_updates' in config:
-                self.auto_check_updates = bool(config.get('auto_check_updates', True))
-
-            # Restore window geometry
-            if 'window_geometry' in config:
+            existing: dict = {}
+            if self._config_path.exists():
                 try:
-                    self.window.geometry(config['window_geometry'])
-                except Exception:
+                    existing = json.loads(self._config_path.read_text())
+                except (json.JSONDecodeError, OSError):
                     pass
 
-        except json.JSONDecodeError as e:
-            print(f"Error: Config file is corrupted: {e}")
-        except (IOError, OSError) as e:
-            print(f"Error: Cannot read config file: {e}")
-        except Exception as e:
-            print(f"Error loading config: {e}")
-
-    def save_config(self):
-        """Save current configuration to JSON file, merging with existing
-        settings so that keys written by the evdev version are preserved."""
-        try:
-            # Create config directory if it doesn't exist
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Load existing config first to preserve keys from the other version
-            existing_config = {}
-            if self.config_path.exists():
-                try:
-                    with open(self.config_path, 'r') as f:
-                        existing_config = json.load(f)
-                except (json.JSONDecodeError, IOError, OSError):
-                    existing_config = {}
-
+            geo = self.geometry()
             config = {
-                'clicker1_interval': self.clicker1_interval,
-                'clicker2_interval': self.clicker2_interval,
-                'clicker1_hotkey': self._serialize_key(self.clicker1_hotkey),
-                'clicker1_hotkey_display': self.clicker1_hotkey_display,
-                'clicker2_hotkey': self._serialize_key(self.clicker2_hotkey),
-                'clicker2_hotkey_display': self.clicker2_hotkey_display,
-                'keypresser_interval': self.keypresser_interval,
-                'keypresser_hotkey': self._serialize_key(self.keypresser_hotkey),
-                'keypresser_hotkey_display': self.keypresser_hotkey_display,
-                'keypresser_target_key_pynput': self._serialize_key(self.keypresser_target_key),
-                'keypresser_target_key_display': self.keypresser_target_key_display,
-                'emergency_stop_hotkey': self._serialize_key(self.emergency_stop_hotkey),
-                'emergency_stop_hotkey_display': self.emergency_stop_hotkey_display,
-                'auto_check_updates': self.auto_check_updates,
-                'window_geometry': self.window.geometry(),
+                "clicker1_interval": self.clicker1_interval,
+                "clicker2_interval": self.clicker2_interval,
+                "clicker1_hotkey": self._serialize_key(self.clicker1_hotkey),
+                "clicker1_hotkey_display": self.clicker1_hotkey_display,
+                "clicker2_hotkey": self._serialize_key(self.clicker2_hotkey),
+                "clicker2_hotkey_display": self.clicker2_hotkey_display,
+                "keypresser_interval": self.keypresser_interval,
+                "keypresser_hotkey": self._serialize_key(self.keypresser_hotkey),
+                "keypresser_hotkey_display": self.keypresser_hotkey_display,
+                "keypresser_target_key_pynput": self._serialize_key(
+                    self.keypresser_target_key
+                ),
+                "keypresser_target_key_display": self.keypresser_target_key_display,
+                "emergency_stop_hotkey": self._serialize_key(
+                    self.emergency_stop_hotkey
+                ),
+                "emergency_stop_hotkey_display": self.emergency_stop_hotkey_display,
+                "auto_check_updates": self.auto_check_updates,
+                "window_geometry": {
+                    "w": geo.width(),
+                    "h": geo.height(),
+                    "x": geo.x(),
+                    "y": geo.y(),
+                },
             }
-
-            # Merge: existing values first, then overwrite with our values
-            existing_config.update(config)
-
-            with open(self.config_path, 'w') as f:
-                json.dump(existing_config, f, indent=2)
-
+            existing.update(config)
+            self._config_path.write_text(json.dumps(existing, indent=2))
         except Exception as e:
             print(f"Error saving config: {e}")
 
-    def _serialize_key(self, key):
-        """Convert a pynput key to a JSON-serializable format"""
-        if hasattr(key, 'name'):
-            return {'type': 'special', 'name': key.name}
-        elif hasattr(key, 'char'):
-            return {'type': 'char', 'char': key.char}
-        else:
-            return {'type': 'special', 'name': 'f6'}  # fallback
+    @staticmethod
+    def _serialize_key(key):
+        """Convert a pynput key to a JSON-serializable format."""
+        if hasattr(key, "name"):
+            return {"type": "special", "name": key.name}
+        elif hasattr(key, "char"):
+            return {"type": "char", "char": key.char}
+        return {"type": "special", "name": "f6"}
 
-    def _deserialize_key(self, key_data):
-        """Convert JSON data back to a pynput key"""
-        # Validate that key_data is a dict with expected structure
+    @staticmethod
+    def _deserialize_key(key_data):
+        """Convert JSON data back to a pynput key."""
         if not isinstance(key_data, dict):
-            print(f"Warning: Invalid hotkey data type, expected dict, got {type(key_data).__name__}")
             return Key.f6
-
-        key_type = key_data.get('type', 'special')
+        key_type = key_data.get("type", "special")
         if not isinstance(key_type, str):
             return Key.f6
-
-        if key_type == 'special':
-            # Get the Key attribute by name
-            name = key_data.get('name', 'f6')
+        if key_type == "special":
+            name = key_data.get("name", "f6")
             if not isinstance(name, str):
                 return Key.f6
             return getattr(Key, name, Key.f6)
-        elif key_type == 'char':
-            char = key_data.get('char')
+        elif key_type == "char":
+            char = key_data.get("char")
             if char and isinstance(char, str) and len(char) == 1:
                 try:
                     return KeyCode.from_char(char)
                 except Exception:
-                    return Key.f6  # fallback if KeyCode creation fails
-            return Key.f6  # fallback if char is missing or invalid
-        else:
-            return Key.f6  # fallback
+                    return Key.f6
+        return Key.f6
 
-    def setup_ui(self):
-        # Create menu bar
-        menubar = tk.Menu(self.window)
-        self.window.config(menu=menubar)
-
-        help_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Help", menu=help_menu)
-        help_menu.add_command(label="Check for Updates", command=self._check_for_updates_clicked)
-
-        # Auto-check updates toggle
-        self.auto_check_var = tk.BooleanVar(value=self.auto_check_updates)
-        help_menu.add_checkbutton(
-            label="Check for Updates on Startup",
-            variable=self.auto_check_var,
-            command=self._toggle_auto_check_updates
-        )
-        help_menu.add_separator()
-        help_menu.add_command(label="Toggle Dark/Light Mode", command=self._toggle_theme)
-        help_menu.add_separator()
-        help_menu.add_command(label="About", command=self._show_about)
-
-        main_frame = ttk.Frame(self.window, padding="20")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-
-        # Title
-        title_label = ttk.Label(main_frame, text="Dual AutoClicker", font=("Arial", 18, "bold"))
-        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
-
-        # Separator
-        separator = ttk.Separator(main_frame, orient='vertical')
-        separator.grid(row=1, column=1, rowspan=6, sticky='ns', padx=20)
-
-        # ----- CLICKER 1 -----
-        self._setup_clicker1_ui(main_frame, 0, 1)
-
-        # ----- CLICKER 2 -----
-        self._setup_clicker2_ui(main_frame, 2, 1)
-
-        # ----- EMERGENCY STOP (always visible) -----
-        hsep_emerg = ttk.Separator(main_frame, orient='horizontal')
-        hsep_emerg.grid(row=8, column=0, columnspan=3, sticky='ew', pady=(20, 10))
-
-        emergency_title = ttk.Label(main_frame, text="Emergency Stop All", font=("Arial", 11, "bold"), foreground="red")
-        emergency_title.grid(row=9, column=0, columnspan=3)
-
-        emerg_row = ttk.Frame(main_frame)
-        emerg_row.grid(row=10, column=0, columnspan=3, pady=(5, 0))
-
-        ttk.Label(emerg_row, text="Hotkey:").pack(side=tk.LEFT, padx=(0, 5))
-        self.emergency_stop_button = ttk.Button(
-            emerg_row,
-            text=f"Current: {self.emergency_stop_hotkey_display}",
-            command=lambda: self.start_hotkey_capture("emergency_stop"),
-            width=15
-        )
-        self.emergency_stop_button.pack(side=tk.LEFT)
-
-        # ----- KEYBOARD KEY PRESSER -----
-        hseparator = ttk.Separator(main_frame, orient='horizontal')
-        hseparator.grid(row=11, column=0, columnspan=3, sticky='ew', pady=(15, 5))
-
-        keypresser_title = ttk.Label(main_frame, text="Keyboard Key Presser", font=("Arial", 14, "bold"))
-        keypresser_title.grid(row=12, column=0, columnspan=3, pady=(5, 10))
-
-        # Left side: target key + interval
-        target_key_label = ttk.Label(main_frame, text="Key to Press:")
-        target_key_label.grid(row=13, column=0, sticky=tk.W, pady=5)
-
-        self.keypresser_target_key_button = ttk.Button(
-            main_frame,
-            text=f"Current: {self.keypresser_target_key_display}",
-            command=self.select_target_key,
-            width=20
-        )
-        self.keypresser_target_key_button.grid(row=14, column=0, sticky=tk.W, pady=5)
-
-        kp_interval_label = ttk.Label(main_frame, text="Interval (seconds):")
-        kp_interval_label.grid(row=15, column=0, sticky=tk.W, pady=(15, 5))
-
-        self.keypresser_interval_var = tk.StringVar(value=str(self.keypresser_interval))
-        kp_interval_entry = ttk.Entry(main_frame, textvariable=self.keypresser_interval_var, width=20)
-        kp_interval_entry.grid(row=16, column=0, sticky=tk.W, pady=5)
-
-        ttk.Button(
-            main_frame, text="Apply Interval",
-            command=self.apply_keypresser_interval
-        ).grid(row=17, column=0, pady=5)
-
-        # Separator
-        separator2 = ttk.Separator(main_frame, orient='vertical')
-        separator2.grid(row=13, column=1, rowspan=5, sticky='ns', padx=20)
-
-        # Right side: hotkey + status
-        kp_hotkey_label = ttk.Label(main_frame, text="Toggle Hotkey:")
-        kp_hotkey_label.grid(row=13, column=2, sticky=tk.W, pady=5)
-
-        self.keypresser_hotkey_button = ttk.Button(
-            main_frame,
-            text=f"Current: {self.keypresser_hotkey_display}",
-            command=lambda: self.start_hotkey_capture("keypresser"),
-            width=20
-        )
-        self.keypresser_hotkey_button.grid(row=14, column=2, sticky=tk.W, pady=5)
-
-        kp_status_label = ttk.Label(main_frame, text="Status:")
-        kp_status_label.grid(row=15, column=2, sticky=tk.W, pady=(15, 5))
-
-        self.keypresser_status_var = tk.StringVar(value="Idle")
-        self.keypresser_status_label = tk.Label(main_frame, textvariable=self.keypresser_status_var, font=("Arial", 10, "bold"), fg=self._t['green'], bg=self._t['bg'])
-        self.keypresser_status_label.grid(row=16, column=2, pady=5)
-
-        # Instructions at bottom
-        instructions = ttk.Label(
-            main_frame,
-            text="Mouse clickers stop each other when started. Keyboard presser is independent.\nEmergency Stop will stop everything at once.",
-            wraplength=650,
-            justify=tk.CENTER,
-            font=("Arial", 9, "italic")
-        )
-        instructions.grid(row=18, column=0, columnspan=3, pady=(15, 0))
-
-        # (Check for Updates is available via Help menu)
-
-    def _setup_clicker1_ui(self, parent, column, start_row):
-        """Setup UI for Clicker 1"""
-        # Title
-        title = ttk.Label(parent, text="Clicker 1", font=("Arial", 14, "bold"))
-        title.grid(row=start_row, column=column, pady=(0, 15))
-
-        # Interval
-        interval_label = ttk.Label(parent, text="Interval (seconds):")
-        interval_label.grid(row=start_row+1, column=column, sticky=tk.W, pady=5)
-
-        self.interval1_var = tk.StringVar(value=str(self.clicker1_interval))
-        interval_entry = ttk.Entry(parent, textvariable=self.interval1_var, width=20)
-        interval_entry.grid(row=start_row+2, column=column, sticky=tk.W, pady=5)
-
-        # Apply interval button
-        apply_button = ttk.Button(
-            parent,
-            text="Apply Interval",
-            command=self.apply_interval1
-        )
-        apply_button.grid(row=start_row+3, column=column, pady=5)
-
-        # Hotkey
-        hotkey_label = ttk.Label(parent, text="Toggle Hotkey:")
-        hotkey_label.grid(row=start_row+4, column=column, sticky=tk.W, pady=(10, 5))
-
-        self.hotkey1_button = ttk.Button(
-            parent,
-            text=f"Current: {self.clicker1_hotkey_display}",
-            command=lambda: self.start_hotkey_capture("clicker1"),
-            width=20
-        )
-        self.hotkey1_button.grid(row=start_row+5, column=column, sticky=tk.W, pady=5)
-
-        # Status
-        self.status1_var = tk.StringVar(value="Idle")
-        self.status1_label = tk.Label(parent, textvariable=self.status1_var, font=("Arial", 10, "bold"), fg=self._t['green'], bg=self._t['bg'])
-        self.status1_label.grid(row=start_row+6, column=column, pady=(10, 5))
-
-    def _setup_clicker2_ui(self, parent, column, start_row):
-        """Setup UI for Clicker 2"""
-        # Title
-        title = ttk.Label(parent, text="Clicker 2", font=("Arial", 14, "bold"))
-        title.grid(row=start_row, column=column, pady=(0, 15))
-
-        # Interval
-        interval_label = ttk.Label(parent, text="Interval (seconds):")
-        interval_label.grid(row=start_row+1, column=column, sticky=tk.W, pady=5)
-
-        self.interval2_var = tk.StringVar(value=str(self.clicker2_interval))
-        interval_entry = ttk.Entry(parent, textvariable=self.interval2_var, width=20)
-        interval_entry.grid(row=start_row+2, column=column, sticky=tk.W, pady=5)
-
-        # Apply interval button
-        apply_button = ttk.Button(
-            parent,
-            text="Apply Interval",
-            command=self.apply_interval2
-        )
-        apply_button.grid(row=start_row+3, column=column, pady=5)
-
-        # Hotkey
-        hotkey_label = ttk.Label(parent, text="Toggle Hotkey:")
-        hotkey_label.grid(row=start_row+4, column=column, sticky=tk.W, pady=(10, 5))
-
-        self.hotkey2_button = ttk.Button(
-            parent,
-            text=f"Current: {self.clicker2_hotkey_display}",
-            command=lambda: self.start_hotkey_capture("clicker2"),
-            width=20
-        )
-        self.hotkey2_button.grid(row=start_row+5, column=column, sticky=tk.W, pady=5)
-
-        # Status
-        self.status2_var = tk.StringVar(value="Idle")
-        self.status2_label = tk.Label(parent, textvariable=self.status2_var, font=("Arial", 10, "bold"), fg=self._t['green'], bg=self._t['bg'])
-        self.status2_label.grid(row=start_row+6, column=column, pady=(10, 5))
-
-    def _apply_interval(self, interval_var, target_attr, name):
-        """Consolidated interval application with validation"""
+    @staticmethod
+    def _validate_interval(interval, default):
         try:
-            interval_value = float(interval_var.get())
-            if interval_value < MIN_INTERVAL:
-                raise ValueError(f"Interval must be at least {MIN_INTERVAL}s (prevents system overload)")
-            if interval_value > MAX_INTERVAL:
+            v = float(interval)
+            if MIN_INTERVAL <= v <= MAX_INTERVAL:
+                return v
+        except (ValueError, TypeError):
+            pass
+        return default
+
+    # ══════════════════════════════════════════════════════════════
+    #  Interval application
+    # ══════════════════════════════════════════════════════════════
+
+    def _apply_interval(self, edit: QLineEdit, target_attr: str, name: str):
+        try:
+            val = float(edit.text())
+            if val < MIN_INTERVAL:
+                raise ValueError(
+                    f"Interval must be at least {MIN_INTERVAL}s "
+                    "(prevents system overload)"
+                )
+            if val > MAX_INTERVAL:
                 raise ValueError(f"Interval must be at most {MAX_INTERVAL}s")
-            # Acquire the appropriate lock before modifying interval
             lock_map = {
-                'clicker1_interval': self.clicker1_lock,
-                'clicker2_interval': self.clicker2_lock,
-                'keypresser_interval': self.keypresser_lock,
+                "clicker1_interval": self.clicker1_lock,
+                "clicker2_interval": self.clicker2_lock,
+                "keypresser_interval": self.keypresser_lock,
             }
             lock = lock_map.get(target_attr)
-            if not lock:
-                setattr(self, target_attr, interval_value)
-                self.save_config()
-                messagebox.showinfo("Success", f"{name} interval updated to {interval_value}s")
-                return
-            with lock:
-                setattr(self, target_attr, interval_value)
-            self.save_config()
-            messagebox.showinfo("Success", f"{name} interval updated to {interval_value}s")
-        except ValueError as e:
-            messagebox.showerror("Error", f"Invalid interval: {e}")
-
-    def apply_interval1(self):
-        self._apply_interval(self.interval1_var, 'clicker1_interval', 'Clicker 1')
-
-    def apply_interval2(self):
-        self._apply_interval(self.interval2_var, 'clicker2_interval', 'Clicker 2')
-
-    def apply_keypresser_interval(self):
-        self._apply_interval(self.keypresser_interval_var, 'keypresser_interval', 'Key Presser')
-
-    def select_target_key(self):
-        """Let user select which keyboard key to auto-press"""
-        dialog = tk.Toplevel(self.window)
-        dialog.title("Select Key to Press")
-        dialog.geometry("300x150")
-        dialog.resizable(False, False)
-        dialog.grab_set()
-        dialog.configure(bg=self._t['bg'])
-
-        label = tk.Label(dialog, text="Press any key...", font=("Arial", 12),
-                         bg=self._t['bg'], fg=self._t['fg'])
-        label.pack(pady=40)
-
-        def on_key_press(event):
-            key_name = event.keysym
-            # Convert tkinter keysym to pynput Key/KeyCode
-            pynput_key = self._tk_keysym_to_pynput(key_name)
-            if pynput_key is not None:
-                self.keypresser_target_key = pynput_key
-                self.keypresser_target_key_display = key_name.upper() if len(key_name) == 1 else key_name.capitalize()
-                self.keypresser_target_key_button.config(text=f"Current: {self.keypresser_target_key_display}")
-                self.save_config()
+            if lock:
+                with lock:
+                    setattr(self, target_attr, val)
             else:
-                messagebox.showwarning(
-                    "Unsupported Key",
-                    f"The key '{key_name}' is not supported.\n\n"
-                    "Please choose a standard letter, number, function key, "
-                    "or one of the recognized special keys."
-                )
-            dialog.destroy()
+                setattr(self, target_attr, val)
+            self._save_config()
+            QMessageBox.information(
+                self, "Success", f"{name} interval updated to {val}s"
+            )
+        except ValueError as e:
+            QMessageBox.critical(self, "Error", f"Invalid interval: {e}")
 
-        dialog.bind("<Key>", on_key_press)
-        dialog.focus_set()
+    def _apply_interval1(self):
+        self._apply_interval(self._interval1_edit, "clicker1_interval", "Clicker 1")
 
-    def _tk_keysym_to_pynput(self, keysym):
-        """Convert tkinter keysym to pynput Key or KeyCode."""
-        special_map = {
-            'space': Key.space, 'Return': Key.enter, 'Tab': Key.tab,
-            'Escape': Key.esc, 'BackSpace': Key.backspace, 'Delete': Key.delete,
-            'Up': Key.up, 'Down': Key.down, 'Left': Key.left, 'Right': Key.right,
-            'Home': Key.home, 'End': Key.end,
-            'Page_Up': Key.page_up, 'Page_Down': Key.page_down,
-            'Insert': Key.insert,
-            'Shift_L': Key.shift_l, 'Shift_R': Key.shift_r,
-            'Control_L': Key.ctrl_l, 'Control_R': Key.ctrl_r,
-            'Alt_L': Key.alt_l, 'Alt_R': Key.alt_r,
-        }
+    def _apply_interval2(self):
+        self._apply_interval(self._interval2_edit, "clicker2_interval", "Clicker 2")
 
-        if keysym in special_map:
-            return special_map[keysym]
+    def _apply_keypresser_interval(self):
+        self._apply_interval(
+            self._kp_interval_edit, "keypresser_interval", "Key Presser"
+        )
 
-        # F keys
-        if keysym.startswith('F') and keysym[1:].isdigit():
-            f_num = int(keysym[1:])
-            if 1 <= f_num <= 12:
-                return getattr(Key, f'f{f_num}', None)
+    # ══════════════════════════════════════════════════════════════
+    #  Target key selection
+    # ══════════════════════════════════════════════════════════════
 
-        # Single character (letter or digit)
-        if len(keysym) == 1:
-            try:
-                return KeyCode.from_char(keysym.lower())
-            except Exception:
-                return None
+    def _select_target_key(self):
+        dlg = KeyCaptureDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.captured_key:
+            self.keypresser_target_key = dlg.captured_key
+            self.keypresser_target_key_display = dlg.captured_display
+            self._kp_target_btn.setText(f"Current: {dlg.captured_display}")
+            self._save_config()
 
-        return None
+    # ══════════════════════════════════════════════════════════════
+    #  Hotkey capture (pynput-based)
+    # ══════════════════════════════════════════════════════════════
 
     def start_hotkey_capture(self, target):
         with self.hotkey_capture_lock:
             if self.listening_for_hotkey:
                 return
-
             self.listening_for_hotkey = True
             self.hotkey_target = target
 
-        if target == "clicker1":
-            self.hotkey1_button.config(text="Press a key...")
-        elif target == "clicker2":
-            self.hotkey2_button.config(text="Press a key...")
-        elif target == "keypresser":
-            self.keypresser_hotkey_button.config(text="Press a key...")
-        else:  # emergency_stop
-            self.emergency_stop_button.config(text="Press a key...")
+        btn_map = {
+            "clicker1": self._hotkey1_btn,
+            "clicker2": self._hotkey2_btn,
+            "keypresser": self._kp_hotkey_btn,
+            "emergency_stop": self._emergency_stop_btn,
+        }
+        btn = btn_map.get(target)
+        if btn:
+            btn.setText("Press a key...")
 
-        # Stop the main keyboard listener temporarily
         self.stop_keyboard_listener()
 
-        # Start a temporary listener to capture the hotkey
         with self.hotkey_capture_lock:
-            self.hotkey_capture_listener = keyboard.Listener(on_press=self.capture_hotkey)
+            self.hotkey_capture_listener = keyboard.Listener(
+                on_press=self.capture_hotkey
+            )
             self.hotkey_capture_listener.start()
 
     def capture_hotkey(self, key):
         with self.hotkey_capture_lock:
             if not self.listening_for_hotkey:
                 return
-
             self.hotkey_capture_listener = None
-
             self.listening_for_hotkey = False
             target = self.hotkey_target
 
-        # Set the new hotkey
         key_display = self.get_key_display_name(key)
 
-        if target == "clicker1":
-            self.clicker1_hotkey = key
-            self.clicker1_hotkey_display = key_display
-            self._safe_after(0, lambda: self.hotkey1_button.config(text=f"Current: {key_display}"))
-        elif target == "clicker2":
-            self.clicker2_hotkey = key
-            self.clicker2_hotkey_display = key_display
-            self._safe_after(0, lambda: self.hotkey2_button.config(text=f"Current: {key_display}"))
-        elif target == "keypresser":
-            self.keypresser_hotkey = key
-            self.keypresser_hotkey_display = key_display
-            self._safe_after(0, lambda: self.keypresser_hotkey_button.config(text=f"Current: {key_display}"))
-        else:  # emergency_stop
-            self.emergency_stop_hotkey = key
-            self.emergency_stop_hotkey_display = key_display
-            self._safe_after(0, lambda: self.emergency_stop_button.config(text=f"Current: {key_display}"))
+        attr_map = {
+            "clicker1": (
+                "clicker1_hotkey",
+                "clicker1_hotkey_display",
+                "_hotkey1_btn",
+            ),
+            "clicker2": (
+                "clicker2_hotkey",
+                "clicker2_hotkey_display",
+                "_hotkey2_btn",
+            ),
+            "keypresser": (
+                "keypresser_hotkey",
+                "keypresser_hotkey_display",
+                "_kp_hotkey_btn",
+            ),
+            "emergency_stop": (
+                "emergency_stop_hotkey",
+                "emergency_stop_hotkey_display",
+                "_emergency_stop_btn",
+            ),
+        }
+        if target in attr_map:
+            key_attr, display_attr, btn_attr = attr_map[target]
+            setattr(self, key_attr, key)
+            setattr(self, display_attr, key_display)
+            btn = getattr(self, btn_attr)
+            self._safe_after(0, lambda b=btn, d=key_display: b.setText(f"Current: {d}"))
 
-        # Save the new configuration (thread-safe file write)
-        self.save_config()
-
-        # Restart the main keyboard listener on main thread safely
+        self._save_config()
         self._safe_after(0, self.start_keyboard_listener)
+        return False  # Stop this pynput listener
 
-        # Return False to tell pynput to stop this listener (avoids deadlock
-        # from calling stop() inside the callback)
-        return False
+    @staticmethod
+    def get_key_display_name(key):
+        if hasattr(key, "name"):
+            name = key.name
+            if name.startswith("f") and name[1:].isdigit():
+                return name.upper()
+            return name.capitalize()
+        elif hasattr(key, "char") and key.char:
+            return key.char.upper()
+        return str(key)
+
+    # ══════════════════════════════════════════════════════════════
+    #  Clicking / Key pressing logic
+    # ══════════════════════════════════════════════════════════════
 
     def perform_click(self):
-        """Perform a single left mouse click using pynput"""
         self.mouse_controller.click(mouse.Button.left, 1)
 
     def perform_keypress(self, target_key):
-        """Perform a single key press using pynput"""
         self.keyboard_controller.press(target_key)
         self.keyboard_controller.release(target_key)
 
-    def get_key_display_name(self, key):
-        # Handle special keys
-        if hasattr(key, 'name'):
-            name = key.name
-            # Format function keys nicely
-            if name.startswith('f') and name[1:].isdigit():
-                return name.upper()
-            # Capitalize first letter for other special keys
-            return name.capitalize()
-        # Handle character keys
-        elif hasattr(key, 'char') and key.char:
-            return key.char.upper()
-        else:
-            return str(key)
-
     def on_hotkey_press(self, key):
-        """Handle hotkey presses with rate limiting"""
         try:
-            # Rate limiting to prevent rapid toggling (thread-safe)
             current_time = time.time()
             key_str = str(key)
-
             with self.hotkey_timing_lock:
                 if key_str in self.last_hotkey_time:
-                    if current_time - self.last_hotkey_time[key_str] < self.hotkey_cooldown:
-                        return  # Ignore rapid key presses
+                    if (
+                        current_time - self.last_hotkey_time[key_str]
+                        < self.hotkey_cooldown
+                    ):
+                        return
                 self.last_hotkey_time[key_str] = current_time
 
-            # Check emergency stop hotkey first (highest priority)
             if key == self.emergency_stop_hotkey:
                 self.emergency_stop_all()
-            # Check clicker 1 hotkey
             elif key == self.clicker1_hotkey:
                 self.toggle_clicker1()
-            # Check clicker 2 hotkey
             elif key == self.clicker2_hotkey:
                 self.toggle_clicker2()
-            # Check keypresser hotkey
             elif key == self.keypresser_hotkey:
                 self.toggle_keypresser()
         except AttributeError:
-            # Key comparison failed - likely a key object without expected attributes
-            # This can happen with some special key combinations
             pass
+
+    # ── Clicker 1 ─────────────────────────────────────────────
 
     def toggle_clicker1(self):
         with self.clicker1_lock:
             clicking = self.clicker1_clicking
         if clicking:
-            # Stop clicker 1
             self.stop_clicker1()
         else:
-            # Start clicker 1 (and stop clicker 2 if running)
             self.stop_clicker2()
             self.start_clicker1()
-
-    def toggle_clicker2(self):
-        with self.clicker2_lock:
-            clicking = self.clicker2_clicking
-        if clicking:
-            # Stop clicker 2
-            self.stop_clicker2()
-        else:
-            # Start clicker 2 (and stop clicker 1 if running)
-            self.stop_clicker1()
-            self.start_clicker2()
 
     def start_clicker1(self):
         with self.clicker1_lock:
             if not self.clicker1_clicking:
                 self.clicker1_clicking = True
-                self._safe_after(0, lambda: self.status1_var.set("Clicking..."))
-                self._safe_after(0, lambda: self.status1_label.config(fg=self._t['red']))
-                self.clicker1_thread = threading.Thread(target=self._click_loop1, daemon=True)
+                self._safe_after(0, lambda: self._status1_label.setText("Clicking..."))
+                self._safe_after(
+                    0,
+                    lambda: self._status1_label.setStyleSheet(
+                        "font-weight: bold; color: #f44747;"
+                    ),
+                )
+                self.clicker1_thread = threading.Thread(
+                    target=self._click_loop1, daemon=True
+                )
                 self.clicker1_thread.start()
 
     def stop_clicker1(self):
         with self.clicker1_lock:
             if self.clicker1_clicking:
                 self.clicker1_clicking = False
-                self._safe_after(0, lambda: self.status1_var.set("Idle"))
-                self._safe_after(0, lambda: self.status1_label.config(fg=self._t['green']))
-
-    def start_clicker2(self):
-        with self.clicker2_lock:
-            if not self.clicker2_clicking:
-                self.clicker2_clicking = True
-                self._safe_after(0, lambda: self.status2_var.set("Clicking..."))
-                self._safe_after(0, lambda: self.status2_label.config(fg=self._t['red']))
-                self.clicker2_thread = threading.Thread(target=self._click_loop2, daemon=True)
-                self.clicker2_thread.start()
-
-    def stop_clicker2(self):
-        with self.clicker2_lock:
-            if self.clicker2_clicking:
-                self.clicker2_clicking = False
-                self._safe_after(0, lambda: self.status2_var.set("Idle"))
-                self._safe_after(0, lambda: self.status2_label.config(fg=self._t['green']))
+                self._safe_after(0, lambda: self._status1_label.setText("Idle"))
+                self._safe_after(
+                    0,
+                    lambda: self._status1_label.setStyleSheet(
+                        "font-weight: bold; color: #4ec9b0;"
+                    ),
+                )
 
     def _click_loop1(self):
-        """Click loop for clicker 1 with error handling"""
         while True:
             with self.clicker1_lock:
                 if not self.clicker1_clicking:
                     break
                 interval = self.clicker1_interval
-
             try:
                 self.perform_click()
             except Exception as e:
                 print(f"Error in clicker 1: {e}")
                 with self.clicker1_lock:
                     self.clicker1_clicking = False
-                self._safe_after(0, lambda: self.status1_var.set("Error"))
-                self._safe_after(0, lambda: self.status1_label.config(fg=self._t['orange']))
+                self._safe_after(0, lambda: self._status1_label.setText("Error"))
+                self._safe_after(
+                    0,
+                    lambda: self._status1_label.setStyleSheet(
+                        "font-weight: bold; color: #ce9178;"
+                    ),
+                )
                 break
-
             time.sleep(interval)
 
+    # ── Clicker 2 ─────────────────────────────────────────────
+
+    def toggle_clicker2(self):
+        with self.clicker2_lock:
+            clicking = self.clicker2_clicking
+        if clicking:
+            self.stop_clicker2()
+        else:
+            self.stop_clicker1()
+            self.start_clicker2()
+
+    def start_clicker2(self):
+        with self.clicker2_lock:
+            if not self.clicker2_clicking:
+                self.clicker2_clicking = True
+                self._safe_after(0, lambda: self._status2_label.setText("Clicking..."))
+                self._safe_after(
+                    0,
+                    lambda: self._status2_label.setStyleSheet(
+                        "font-weight: bold; color: #f44747;"
+                    ),
+                )
+                self.clicker2_thread = threading.Thread(
+                    target=self._click_loop2, daemon=True
+                )
+                self.clicker2_thread.start()
+
+    def stop_clicker2(self):
+        with self.clicker2_lock:
+            if self.clicker2_clicking:
+                self.clicker2_clicking = False
+                self._safe_after(0, lambda: self._status2_label.setText("Idle"))
+                self._safe_after(
+                    0,
+                    lambda: self._status2_label.setStyleSheet(
+                        "font-weight: bold; color: #4ec9b0;"
+                    ),
+                )
+
     def _click_loop2(self):
-        """Click loop for clicker 2 with error handling"""
         while True:
             with self.clicker2_lock:
                 if not self.clicker2_clicking:
                     break
                 interval = self.clicker2_interval
-
             try:
                 self.perform_click()
             except Exception as e:
                 print(f"Error in clicker 2: {e}")
                 with self.clicker2_lock:
                     self.clicker2_clicking = False
-                self._safe_after(0, lambda: self.status2_var.set("Error"))
-                self._safe_after(0, lambda: self.status2_label.config(fg=self._t['orange']))
+                self._safe_after(0, lambda: self._status2_label.setText("Error"))
+                self._safe_after(
+                    0,
+                    lambda: self._status2_label.setStyleSheet(
+                        "font-weight: bold; color: #ce9178;"
+                    ),
+                )
                 break
-
             time.sleep(interval)
+
+    # ── Key Presser ───────────────────────────────────────────
 
     def toggle_keypresser(self):
         with self.keypresser_lock:
-            is_pressing = self.keypresser_pressing
-        if is_pressing:
+            pressing = self.keypresser_pressing
+        if pressing:
             self.stop_keypresser()
         else:
             self.start_keypresser()
@@ -909,47 +1275,65 @@ class DualAutoClicker:
         with self.keypresser_lock:
             if not self.keypresser_pressing:
                 self.keypresser_pressing = True
-                self._safe_after(0, lambda: self.keypresser_status_var.set("Pressing..."))
-                self._safe_after(0, lambda: self.keypresser_status_label.config(fg=self._t['red']))
-                self.keypresser_thread = threading.Thread(target=self._keypresser_loop, daemon=True)
+                self._safe_after(
+                    0, lambda: self._kp_status_label.setText("Pressing...")
+                )
+                self._safe_after(
+                    0,
+                    lambda: self._kp_status_label.setStyleSheet(
+                        "font-weight: bold; color: #f44747;"
+                    ),
+                )
+                self.keypresser_thread = threading.Thread(
+                    target=self._keypresser_loop, daemon=True
+                )
                 self.keypresser_thread.start()
 
     def stop_keypresser(self):
         with self.keypresser_lock:
             if self.keypresser_pressing:
                 self.keypresser_pressing = False
-                self._safe_after(0, lambda: self.keypresser_status_var.set("Idle"))
-                self._safe_after(0, lambda: self.keypresser_status_label.config(fg=self._t['green']))
+                self._safe_after(0, lambda: self._kp_status_label.setText("Idle"))
+                self._safe_after(
+                    0,
+                    lambda: self._kp_status_label.setStyleSheet(
+                        "font-weight: bold; color: #4ec9b0;"
+                    ),
+                )
 
     def _keypresser_loop(self):
-        """Key press loop with error handling"""
         while True:
             with self.keypresser_lock:
                 if not self.keypresser_pressing:
                     break
                 interval = self.keypresser_interval
                 target_key = self.keypresser_target_key
-
             try:
                 self.perform_keypress(target_key)
             except Exception as e:
                 print(f"Error in key presser: {e}")
                 with self.keypresser_lock:
                     self.keypresser_pressing = False
-                self._safe_after(0, lambda: self.keypresser_status_var.set("Error"))
-                self._safe_after(0, lambda: self.keypresser_status_label.config(fg=self._t['orange']))
+                self._safe_after(0, lambda: self._kp_status_label.setText("Error"))
+                self._safe_after(
+                    0,
+                    lambda: self._kp_status_label.setStyleSheet(
+                        "font-weight: bold; color: #ce9178;"
+                    ),
+                )
                 break
-
             time.sleep(interval)
 
+    # ── Emergency Stop ────────────────────────────────────────
+
     def emergency_stop_all(self):
-        """Stop all autoclickers and key presser immediately"""
         self.stop_clicker1()
         self.stop_clicker2()
         self.stop_keypresser()
 
+    # ── Keyboard listener ─────────────────────────────────────
+
     def start_keyboard_listener(self):
-        # Stop existing listener first if present to prevent resource leak
         if self.keyboard_listener:
             try:
                 self.keyboard_listener.stop()
@@ -965,228 +1349,135 @@ class DualAutoClicker:
             except Exception:
                 pass
 
-    def on_closing(self):
-        self.stop_clicker1()
-        self.stop_clicker2()
-        self.stop_keypresser()
-        self.stop_keyboard_listener()
-        if self.hotkey_capture_listener:
-            try:
-                self.hotkey_capture_listener.stop()
-            except Exception:
-                pass
-        # Wait for threads to finish to ensure clean shutdown
-        for name, thread in [("Clicker 1", self.clicker1_thread),
-                             ("Clicker 2", self.clicker2_thread),
-                             ("Key presser", self.keypresser_thread)]:
-            if thread and thread.is_alive():
-                thread.join(timeout=1.0)
-                if thread.is_alive():
-                    print(f"Warning: {name} thread did not exit cleanly")
-        self.save_config()
-        self.window.destroy()
-
-    # Update feature methods
-    def _show_about(self):
-        """Show about dialog with clickable link and image."""
-        t = self._t
-        dialog = tk.Toplevel(self.window)
-        dialog.title("About")
-        dialog.configure(bg=t['bg'])
-        dialog.transient(self.window)
-        dialog.grab_set()
-        dialog.resizable(False, False)
-
-        tk.Label(dialog, text="Dual AutoClicker + Key Presser",
-                 font=("Arial", 14, "bold"), bg=t['bg'], fg=t['fg']
-                 ).pack(pady=(20, 5))
-
-        tk.Label(dialog, text=f"v{__version__}",
-                 font=("Arial", 10), bg=t['bg'], fg=t['muted']
-                 ).pack(pady=(0, 10))
-
-        tk.Label(dialog, text="A cross-platform dual autoclicker\nwith keyboard presser and configurable hotkeys.",
-                 justify=tk.CENTER, bg=t['bg'], fg=t['fg']
-                 ).pack(pady=(0, 10))
-
-        # Clickable GitHub link
-        link = tk.Label(dialog, text="github.com/jj-repository/autoclicker",
-                        fg=t['link'], bg=t['bg'], cursor="hand2",
-                        font=("Arial", 10, "underline"))
-        link.pack(pady=(0, 15))
-        link.bind("<Button-1>", lambda e: __import__('webbrowser').open("https://github.com/jj-repository/autoclicker"))
-
-        # Takodachi image
-        if self._about_image:
-            tk.Label(dialog, image=self._about_image, bg=t['bg']).pack(pady=(5, 5))
-
-        tk.Label(dialog, text="by JJ", font=("Arial", 11, "italic"),
-                 bg=t['bg'], fg=t['muted']).pack(pady=(0, 15))
-
-        ttk.Button(dialog, text="OK", command=dialog.destroy).pack(pady=(0, 20))
-
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() - dialog.winfo_reqwidth()) // 2
-        y = (dialog.winfo_screenheight() - dialog.winfo_reqheight()) // 2
-        dialog.geometry(f"+{x}+{y}")
-
-    def _version_newer(self, latest, current):
-        """
-        Compare version strings to check if latest is newer than current.
-
-        Handles semantic versioning with pre-release suffixes:
-        - "1.4.0" > "1.3.0"
-        - "1.4.0" > "1.4.0-beta"
-        - "1.4.0-beta2" > "1.4.0-beta1"
-        """
-        def parse_version(version_str):
-            """Parse version string into comparable tuple."""
-            if not version_str or not isinstance(version_str, str):
-                return (0, 0, 0, '', 0)
-
-            # Remove 'v' prefix if present
-            version_str = version_str.lstrip('v')
-
-            # Split by hyphen to separate main version from pre-release
-            if '-' in version_str:
-                main_part, pre_release = version_str.split('-', 1)
-            else:
-                main_part, pre_release = version_str, ''
-
-            # Parse main version parts
-            parts = []
-            for part in main_part.split('.'):
-                try:
-                    parts.append(int(part))
-                except ValueError:
-                    # Handle non-numeric parts by extracting leading digits
-                    digits = ''
-                    for c in part:
-                        if c.isdigit():
-                            digits += c
-                        else:
-                            break
-                    parts.append(int(digits) if digits else 0)
-
-            # Pad to at least 3 parts
-            while len(parts) < 3:
-                parts.append(0)
-
-            # Parse pre-release number if present (e.g., "beta2" -> 2)
-            pre_release_num = 0
-            if pre_release:
-                digits = ''.join(c for c in pre_release if c.isdigit())
-                pre_release_num = int(digits) if digits else 0
-
-            # Return tuple: (major, minor, patch, pre_release_str, pre_release_num)
-            # Empty pre_release string sorts AFTER any pre-release (stable > beta)
-            return (parts[0], parts[1], parts[2], pre_release == '', pre_release_num)
-
-        try:
-            latest_parsed = parse_version(latest)
-            current_parsed = parse_version(current)
-            return latest_parsed > current_parsed
-        except Exception:
-            return False
-
-    def _check_for_updates_clicked(self):
-        """Handle Check for Updates menu click."""
-        threading.Thread(target=self._check_for_updates, args=(False,), daemon=True).start()
+    # ── Settings callbacks ────────────────────────────────────
 
     def _toggle_auto_check_updates(self):
-        """Toggle automatic update checking on startup."""
-        self.auto_check_updates = self.auto_check_var.get()
-        self.save_config()
+        self.auto_check_updates = self._auto_update_cb.isChecked()
+        self._save_config()
+
+    # ══════════════════════════════════════════════════════════════
+    #  Update feature
+    # ══════════════════════════════════════════════════════════════
+
+    def _check_for_updates_clicked(self):
+        threading.Thread(
+            target=self._check_for_updates, args=(False,), daemon=True
+        ).start()
 
     def _check_for_updates(self, silent=True):
-        """Check GitHub for new version."""
-        import urllib.request
         import urllib.error
+        import urllib.request
 
         try:
             request = urllib.request.Request(
                 GITHUB_API_LATEST,
-                headers={'User-Agent': f'DualAutoClicker/{__version__}'}
+                headers={"User-Agent": f"DualAutoClicker/{__version__}"},
             )
             with urllib.request.urlopen(request, timeout=10) as response:
-                raw = response.read(1024 * 1024 + 1)  # 1MB limit
+                raw = response.read(1024 * 1024 + 1)
                 if len(raw) > 1024 * 1024:
                     raise ValueError("API response too large")
                 data = json.loads(raw.decode())
 
-            latest_version = data.get('tag_name', '').lstrip('v')
-
+            latest_version = data.get("tag_name", "").lstrip("v")
             if not latest_version:
                 raise ValueError("No version tag found in release")
 
             if self._version_newer(latest_version, __version__):
-                self._safe_after(0, lambda: self._show_update_dialog(latest_version, data))
+                self._safe_after(
+                    0,
+                    lambda: self._show_update_dialog(latest_version, data),
+                )
             elif not silent:
-                self._safe_after(0, lambda: messagebox.showinfo(
-                    "Up to Date",
-                    f"You are running the latest version (v{__version__})."
-                ))
-
-        except urllib.error.URLError as e:
-            if not silent:
-                self._safe_after(0, lambda _e=e: messagebox.showerror(
-                    "Update Error",
-                    f"Failed to check for updates:\n{_e}"
-                ))
+                self._safe_after(
+                    0,
+                    lambda: QMessageBox.information(
+                        self,
+                        "Up to Date",
+                        f"You are running the latest version (v{__version__}).",
+                    ),
+                )
         except Exception as e:
             if not silent:
-                self._safe_after(0, lambda _e=e: messagebox.showerror(
-                    "Update Error",
-                    f"Failed to check for updates:\n{_e}"
-                ))
+                self._safe_after(
+                    0,
+                    lambda _e=e: QMessageBox.critical(
+                        self,
+                        "Update Error",
+                        f"Failed to check for updates:\n{_e}",
+                    ),
+                )
 
     def _show_update_dialog(self, latest_version, release_data):
-        """Show update available dialog with options."""
-        dialog = tk.Toplevel(self.window)
-        dialog.title("Update Available")
-        dialog.transient(self.window)
-        dialog.grab_set()
-        dialog.geometry("400x200")
-        dialog.resizable(False, False)
+        msg = (
+            f"A new version is available!\n\n"
+            f"Current: v{__version__}\nLatest: v{latest_version}\n\n"
+            f"Would you like to update?"
+        )
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("Update Available")
+        dlg.setText(msg)
+        update_btn = dlg.addButton("Update Now", QMessageBox.ButtonRole.AcceptRole)
+        releases_btn = dlg.addButton("Open Releases", QMessageBox.ButtonRole.ActionRole)
+        dlg.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        dlg.exec()
 
-        msg = f"A new version is available!\n\nCurrent: v{__version__}\nLatest: v{latest_version}\n\nWould you like to update?"
-        ttk.Label(dialog, text=msg, justify=tk.CENTER, wraplength=350).pack(pady=20)
-
-        btn_frame = ttk.Frame(dialog)
-        btn_frame.pack(pady=10)
-
-        def update_now():
-            dialog.destroy()
-            threading.Thread(target=self._apply_update, args=(release_data,), daemon=True).start()
-
-        def open_releases():
-            dialog.destroy()
+        clicked = dlg.clickedButton()
+        if clicked == update_btn:
+            threading.Thread(
+                target=self._apply_update,
+                args=(release_data,),
+                daemon=True,
+            ).start()
+        elif clicked == releases_btn:
             import webbrowser
+
             webbrowser.open(GITHUB_RELEASES_URL)
 
-        ttk.Button(btn_frame, text="Update Now", command=update_now).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Open Releases", command=open_releases).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Later", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+    @staticmethod
+    def _version_newer(latest, current):
+        def parse_version(vs):
+            if not vs or not isinstance(vs, str):
+                return (0, 0, 0, "", 0)
+            vs = vs.lstrip("v")
+            if "-" in vs:
+                main_part, pre = vs.split("-", 1)
+            else:
+                main_part, pre = vs, ""
+            parts = []
+            for p in main_part.split("."):
+                digits = "".join(c for c in p if c.isdigit())
+                parts.append(int(digits) if digits else 0)
+            while len(parts) < 3:
+                parts.append(0)
+            pre_num = 0
+            if pre:
+                d = "".join(c for c in pre if c.isdigit())
+                pre_num = int(d) if d else 0
+            return (parts[0], parts[1], parts[2], pre == "", pre_num)
 
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() - dialog.winfo_width()) // 2
-        y = (dialog.winfo_screenheight() - dialog.winfo_height()) // 2
-        dialog.geometry(f"+{x}+{y}")
+        try:
+            return parse_version(latest) > parse_version(current)
+        except Exception:
+            return False
 
     def _compute_git_blob_sha(self, content):
-        """Compute git blob SHA1 (same as git hash-object)."""
         import hashlib
+
         header = f"blob {len(content)}\0".encode()
         return hashlib.sha1(header + content).hexdigest()
 
     def _verify_file_against_github(self, tag_name, filename, content, headers):
-        """Verify content matches GitHub's git tree SHA for this release tag."""
         import urllib.request
-        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}?ref={tag_name}"
+
+        api_url = (
+            f"https://api.github.com/repos/{GITHUB_REPO}"
+            f"/contents/{filename}?ref={tag_name}"
+        )
         request = urllib.request.Request(api_url, headers=headers)
         with urllib.request.urlopen(request, timeout=30) as response:
             file_info = json.loads(response.read().decode())
-        expected_sha = file_info.get('sha', '')
+        expected_sha = file_info.get("sha", "")
         actual_sha = self._compute_git_blob_sha(content)
         if actual_sha != expected_sha:
             raise RuntimeError(
@@ -1196,75 +1487,71 @@ class DualAutoClicker:
             )
 
     def _apply_update(self, release_data):
-        """Download and apply update with git blob SHA integrity verification."""
-        import urllib.request
-        import urllib.error
-        import shutil
         import os as os_module
+        import shutil
+        import urllib.error
+        import urllib.request
 
         tmp_path = None
+        progress_state: dict = {"dlg": None, "lbl": None, "bar": None}
 
-        # Progress dialog state (populated on main thread via _safe_after)
-        progress_state = {'dialog': None, 'label': None, 'bar': None}
+        def _create_progress():
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Downloading Update")
+            dlg.setFixedSize(360, 90)
+            dlg.setModal(True)
+            lay = QVBoxLayout(dlg)
+            lbl = QLabel("Downloading update...")
+            lay.addWidget(lbl)
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            lay.addWidget(bar)
+            dlg.closeEvent = lambda e: e.ignore()
+            progress_state.update(dlg=dlg, lbl=lbl, bar=bar)
+            dlg.show()
 
-        def _create_progress_dialog():
-            t = self._t
-            dlg = tk.Toplevel(self.window)
-            dlg.title('Downloading Update')
-            dlg.geometry('360x90')
-            dlg.resizable(False, False)
-            dlg.transient(self.window)
-            dlg.grab_set()
-            dlg.protocol('WM_DELETE_WINDOW', lambda: None)
-            dlg.configure(bg=t['bg'])
-            lbl = tk.Label(dlg, text='Downloading update...', bg=t['bg'], fg=t['fg'])
-            lbl.pack(pady=(12, 4))
-            bar = ttk.Progressbar(dlg, length=320, mode='determinate', maximum=100)
-            bar.pack(padx=20, pady=(0, 12))
-            progress_state['dialog'] = dlg
-            progress_state['label'] = lbl
-            progress_state['bar'] = bar
-
-        def _update_progress_dialog(pct, mb, total_mb):
-            if progress_state['label']:
-                progress_state['label'].config(
-                    text=f'Downloading update... {mb:.1f}/{total_mb:.1f} MB ({pct}%)'
+        def _update_progress(pct, mb, total_mb):
+            if progress_state["lbl"]:
+                progress_state["lbl"].setText(
+                    f"Downloading update... {mb:.1f}/{total_mb:.1f} MB ({pct}%)"
                 )
-            if progress_state['bar']:
-                progress_state['bar']['value'] = pct
+            if progress_state["bar"]:
+                progress_state["bar"].setValue(pct)
 
-        def _close_progress_dialog():
-            if progress_state['dialog']:
+        def _close_progress():
+            if progress_state["dlg"]:
                 try:
-                    progress_state['dialog'].grab_release()
-                    progress_state['dialog'].destroy()
-                except tk.TclError:
+                    progress_state["dlg"].close()
+                except RuntimeError:
                     pass
-                progress_state['dialog'] = None
+                progress_state["dlg"] = None
 
-        self._safe_after(0, _create_progress_dialog)
+        self._safe_after(0, _create_progress)
 
         try:
-            tag_name = release_data.get('tag_name', 'main')
+            tag_name = release_data.get("tag_name", "main")
             download_url = f"{GITHUB_RAW_URL}/{tag_name}/autoclicker.py"
+            headers = {"User-Agent": f"DualAutoClicker/{__version__}"}
 
-            headers = {'User-Agent': f'DualAutoClicker/{__version__}'}
-
-            # Download the update file in chunks with progress reporting
             request = urllib.request.Request(download_url, headers=headers)
             with urllib.request.urlopen(request, timeout=60) as response:
-                content_length = response.headers.get('Content-Length')
+                content_length = response.headers.get("Content-Length")
                 total_bytes = 0
                 if content_length:
                     try:
                         total_bytes = int(content_length)
                         if total_bytes > MAX_DOWNLOAD_SIZE:
-                            self._safe_after(0, lambda: messagebox.showerror(
-                                "Update Failed",
-                                f"Update file too large ({total_bytes / 1024 / 1024:.1f}MB).\n"
-                                f"Maximum allowed: {MAX_DOWNLOAD_SIZE / 1024 / 1024:.1f}MB\n\n"
-                                "This may indicate a compromised update. Please download manually."
-                            ))
+                            self._safe_after(
+                                0,
+                                lambda: QMessageBox.critical(
+                                    self,
+                                    "Update Failed",
+                                    f"Update file too large "
+                                    f"({total_bytes / 1024 / 1024:.1f}MB).\n"
+                                    f"Max: "
+                                    f"{MAX_DOWNLOAD_SIZE / 1024 / 1024:.1f}MB",
+                                ),
+                            )
                             return
                     except ValueError:
                         pass
@@ -1278,146 +1565,202 @@ class DualAutoClicker:
                     chunks.append(chunk)
                     downloaded += len(chunk)
                     if downloaded > MAX_DOWNLOAD_SIZE:
-                        self._safe_after(0, lambda: messagebox.showerror(
-                            "Update Failed",
-                            f"Update file exceeds maximum size ({MAX_DOWNLOAD_SIZE / 1024 / 1024:.1f}MB).\n\n"
-                            "This may indicate a compromised update. Please download manually."
-                        ))
+                        self._safe_after(
+                            0,
+                            lambda: QMessageBox.critical(
+                                self,
+                                "Update Failed",
+                                "Update file exceeds maximum size.",
+                            ),
+                        )
                         return
                     if total_bytes > 0:
                         pct = int(downloaded / total_bytes * 100)
                         mb = downloaded / (1024 * 1024)
-                        total_mb = total_bytes / (1024 * 1024)
-                        self._safe_after(0, lambda p=pct, m=mb, t=total_mb:
-                                         _update_progress_dialog(p, m, t))
-                content = b''.join(chunks)
+                        tmb = total_bytes / (1024 * 1024)
+                        self._safe_after(
+                            0,
+                            lambda p=pct, m=mb, t=tmb: _update_progress(p, m, t),
+                        )
+                content = b"".join(chunks)
 
-            # Verify integrity using git blob SHA against GitHub Contents API
-            self._verify_file_against_github(tag_name, 'autoclicker.py', content, headers)
+            # Verify integrity via git blob SHA
+            self._verify_file_against_github(
+                tag_name, "autoclicker.py", content, headers
+            )
 
-            # Integrity verified - now perform atomic file operations
             current_script = Path(__file__).resolve()
             script_dir = current_script.parent
-            backup_path = current_script.with_suffix('.py.backup')
-
-            # Create temp file in SAME directory as target for atomic replace
-            # (os.replace() is only atomic within the same filesystem)
+            backup_path = current_script.with_suffix(".py.backup")
             tmp_path = script_dir / f".autoclicker_update_{os_module.getpid()}.tmp"
 
             # Write verified content to temp file
             try:
-                with open(tmp_path, 'wb') as f:
+                with open(tmp_path, "wb") as f:
                     f.write(content)
                     f.flush()
-                    os_module.fsync(f.fileno())  # Ensure data is written to disk
-            except (IOError, OSError) as write_error:
-                self._safe_after(0, lambda _e=write_error: messagebox.showerror(
-                    "Update Failed",
-                    f"Failed to write update file:\n{_e}"
-                ))
+                    os_module.fsync(f.fileno())
+            except (IOError, OSError) as e:
+                self._safe_after(
+                    0,
+                    lambda _e=e: QMessageBox.critical(
+                        self,
+                        "Update Failed",
+                        f"Failed to write update file:\n{_e}",
+                    ),
+                )
                 return
 
-            # Create backup of current script
+            # Backup current script
             try:
                 shutil.copy2(current_script, backup_path)
-            except (IOError, OSError) as backup_error:
-                self._safe_after(0, lambda _e=backup_error: messagebox.showerror(
-                    "Update Failed",
-                    f"Failed to create backup:\n{_e}"
-                ))
+            except (IOError, OSError) as e:
+                self._safe_after(
+                    0,
+                    lambda _e=e: QMessageBox.critical(
+                        self,
+                        "Update Failed",
+                        f"Failed to create backup:\n{_e}",
+                    ),
+                )
                 return
 
-            # Replace the current script with the update
+            # Replace current script with update
             try:
-                if sys.platform == 'win32':
-                    # On Windows, os.replace() can fail when the target file
-                    # is locked.  Windows does allow renaming an in-use file,
-                    # so rename the current script out of the way first, then
-                    # move the new file in.  If the move fails, restore the
-                    # original from the .old rename.
-                    old_path = current_script.with_suffix('.py.old')
+                if sys.platform == "win32":
+                    old_path = current_script.with_suffix(".py.old")
                     try:
-                        # Remove any leftover .old file from a previous update
                         if old_path.exists():
                             old_path.unlink()
                         os_module.rename(str(current_script), str(old_path))
-                    except OSError as rename_error:
-                        self._safe_after(0, lambda _e=rename_error: messagebox.showerror(
-                            "Update Failed",
-                            f"Failed to rename current script:\n{_e}\n\n"
-                            f"Your backup is safe at:\n{backup_path}"
-                        ))
+                    except OSError as e:
+                        self._safe_after(
+                            0,
+                            lambda _e=e: QMessageBox.critical(
+                                self,
+                                "Update Failed",
+                                f"Failed to rename current script:\n{_e}\n\n"
+                                f"Backup at: {backup_path}",
+                            ),
+                        )
                         return
                     try:
                         os_module.rename(str(tmp_path), str(current_script))
-                        tmp_path = None  # Mark as successfully moved
-                    except OSError as move_error:
-                        # Restore the original file from .old
+                        tmp_path = None
+                    except OSError as e:
                         try:
                             os_module.rename(str(old_path), str(current_script))
                         except OSError:
-                            pass  # backup_path still has a copy
-                        self._safe_after(0, lambda _e=move_error: messagebox.showerror(
-                            "Update Failed",
-                            f"Failed to move update into place:\n{_e}\n\n"
-                            f"Your backup is safe at:\n{backup_path}"
-                        ))
+                            pass
+                        self._safe_after(
+                            0,
+                            lambda _e=e: QMessageBox.critical(
+                                self,
+                                "Update Failed",
+                                f"Failed to move update:\n{_e}\n\n"
+                                f"Backup at: {backup_path}",
+                            ),
+                        )
                         return
                 else:
-                    # POSIX: os.replace() is atomic
                     os_module.replace(str(tmp_path), str(current_script))
-                    tmp_path = None  # Mark as successfully moved (no cleanup needed)
-            except (IOError, OSError) as replace_error:
-                self._safe_after(0, lambda _e=replace_error: messagebox.showerror(
-                    "Update Failed",
-                    f"Failed to apply update:\n{_e}\n\n"
-                    f"Your backup is safe at:\n{backup_path}"
-                ))
+                    tmp_path = None
+            except (IOError, OSError) as e:
+                self._safe_after(
+                    0,
+                    lambda _e=e: QMessageBox.critical(
+                        self,
+                        "Update Failed",
+                        f"Failed to apply update:\n{_e}\n\nBackup at: {backup_path}",
+                    ),
+                )
                 return
 
-            # Clean up backup and any leftover .old file
-            for _stale in [backup_path, current_script.with_suffix('.py.old')]:
+            # Clean up stale files
+            for stale in [backup_path, current_script.with_suffix(".py.old")]:
                 try:
-                    if _stale.exists():
-                        _stale.unlink()
+                    if stale.exists():
+                        stale.unlink()
                 except OSError:
                     pass
 
-            def _on_update_complete():
-                _close_progress_dialog()
-                messagebox.showinfo(
+            def _on_complete():
+                _close_progress()
+                QMessageBox.information(
+                    self,
                     "Update Applied",
                     "AutoClicker has been updated successfully!\n\n"
-                    "Please relaunch AutoClicker to run the new version."
+                    "Please relaunch AutoClicker to run the new version.",
                 )
-                self.on_closing()
+                self.close()
 
-            self._safe_after(0, _on_update_complete)
+            self._safe_after(0, _on_complete)
 
-        except urllib.error.URLError as e:
-            self._safe_after(0, lambda: _close_progress_dialog())
-            self._safe_after(0, lambda _e=e: messagebox.showerror(
-                "Update Failed",
-                f"Network error while downloading update:\n{_e}"
-            ))
         except Exception as e:
-            self._safe_after(0, lambda: _close_progress_dialog())
-            self._safe_after(0, lambda _e=e: messagebox.showerror(
-                "Update Failed",
-                f"Unexpected error during update:\n{type(_e).__name__}: {_e}"
-            ))
+            self._safe_after(0, _close_progress)
+            self._safe_after(
+                0,
+                lambda _e=e: QMessageBox.critical(
+                    self,
+                    "Update Failed",
+                    f"Unexpected error:\n{type(_e).__name__}: {_e}",
+                ),
+            )
         finally:
-            # Clean up temp file if it still exists (failed update)
+            self._safe_after(0, _close_progress)
             if tmp_path is not None:
                 try:
                     Path(tmp_path).unlink()
                 except OSError as cleanup_error:
-                    print(f"Warning: Failed to clean up temp file {tmp_path}: {cleanup_error}")
+                    print(
+                        f"Warning: Failed to clean up temp file "
+                        f"{tmp_path}: {cleanup_error}"
+                    )
 
-    def run(self):
-        self.window.mainloop()
+    # ── Utilities ─────────────────────────────────────────────
+
+    def _open_logs_folder(self):
+        logs = _settings_path().parent / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(logs)))
+
+    # ── Window close ──────────────────────────────────────────
+
+    def closeEvent(self, event):
+        self.stop_clicker1()
+        self.stop_clicker2()
+        self.stop_keypresser()
+        self.stop_keyboard_listener()
+        if self.hotkey_capture_listener:
+            try:
+                self.hotkey_capture_listener.stop()
+            except Exception:
+                pass
+        for name, thread in [
+            ("Clicker 1", self.clicker1_thread),
+            ("Clicker 2", self.clicker2_thread),
+            ("Key presser", self.keypresser_thread),
+        ]:
+            if thread and thread.is_alive():
+                thread.join(timeout=1.0)
+                if thread.is_alive():
+                    print(f"Warning: {name} thread did not exit cleanly")
+        self._save_config()
+        event.accept()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Entry point
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setWindowIcon(_make_icon())
+    win = AppWindow()
+    win.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
-    app = DualAutoClicker()
-    app.run()
+    main()
