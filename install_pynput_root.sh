@@ -1,4 +1,6 @@
 #!/bin/bash
-echo "Installing pynput for root user..."
-sudo pip install pynput --break-system-packages
-echo "Done! You can now run: sudo python3 autoclicker.py"
+set -euo pipefail
+echo "Installing pynput for root user in dedicated venv..."
+sudo python3 -m venv /opt/autoclicker-venv
+sudo /opt/autoclicker-venv/bin/pip install pynput
+echo "Done! Run with: sudo /opt/autoclicker-venv/bin/python autoclicker.py"

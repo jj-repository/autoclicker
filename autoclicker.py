@@ -13,9 +13,12 @@ use autoclicker_evdev.py instead (requires root/uinput permissions).
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import platform
+import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -54,9 +57,21 @@ from PyQt6.QtWidgets import (
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 
+from autoclicker_core import (
+    MIN_INTERVAL,
+    MAX_INTERVAL,
+    DEFAULT_CLICKER1_INTERVAL,
+    DEFAULT_CLICKER2_INTERVAL,
+    DEFAULT_KEYPRESSER_INTERVAL,
+    validate_interval,
+    serialize_key,
+    deserialize_key,
+    get_key_display_name as _core_get_key_display_name,
+)
+
 # ── App identity ──────────────────────────────────────────────────────
 APP_NAME = "AutoClicker"
-__version__ = "1.11"
+__version__ = "1.12"
 VERSION = __version__
 WINDOW_SIZE = (560, 820)
 
@@ -66,18 +81,17 @@ BLUE = ("#1565c0", "#1976d2")
 YELLOW = ("#f9a825", "#fbc02d")
 RED = ("#c62828", "#e53935")
 
+# ── Status colors ────────────────────────────────────────────────────
+STATUS_IDLE_COLOR = "#4ec9b0"
+STATUS_ACTIVE_COLOR = "#f44747"
+STATUS_ERROR_COLOR = "#ce9178"
+
 # ── Update Constants ──────────────────────────────────────────────────
 GITHUB_REPO = "jj-repository/autoclicker"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}"
 
-# ── Interval Constants ────────────────────────────────────────────────
-MIN_INTERVAL = 0.01
-MAX_INTERVAL = 60.0
-DEFAULT_CLICKER1_INTERVAL = 0.1
-DEFAULT_CLICKER2_INTERVAL = 0.5
-DEFAULT_KEYPRESSER_INTERVAL = 0.1
 MAX_DOWNLOAD_SIZE = 5 * 1024 * 1024
 
 
@@ -113,6 +127,7 @@ QToolTip { background: #ffffcc; color: #1e1e1e; border: 1px solid #bbb; }
 def _make_checkbox_images() -> tuple[str, str]:
     """Generate dark-mode checked/unchecked checkbox PNGs."""
     d = tempfile.mkdtemp(prefix=f"{APP_NAME.lower()}_")
+    atexit.register(shutil.rmtree, d, ignore_errors=True)
     size = 18
 
     unchecked = QPixmap(size, size)
@@ -915,46 +930,9 @@ class AppWindow(QMainWindow):
         except Exception as e:
             print(f"Error saving config: {e}")
 
-    @staticmethod
-    def _serialize_key(key):
-        """Convert a pynput key to a JSON-serializable format."""
-        if hasattr(key, "name"):
-            return {"type": "special", "name": key.name}
-        elif hasattr(key, "char"):
-            return {"type": "char", "char": key.char}
-        return {"type": "special", "name": "f6"}
-
-    @staticmethod
-    def _deserialize_key(key_data):
-        """Convert JSON data back to a pynput key."""
-        if not isinstance(key_data, dict):
-            return Key.f6
-        key_type = key_data.get("type", "special")
-        if not isinstance(key_type, str):
-            return Key.f6
-        if key_type == "special":
-            name = key_data.get("name", "f6")
-            if not isinstance(name, str):
-                return Key.f6
-            return getattr(Key, name, Key.f6)
-        elif key_type == "char":
-            char = key_data.get("char")
-            if char and isinstance(char, str) and len(char) == 1:
-                try:
-                    return KeyCode.from_char(char)
-                except Exception:
-                    return Key.f6
-        return Key.f6
-
-    @staticmethod
-    def _validate_interval(interval, default):
-        try:
-            v = float(interval)
-            if MIN_INTERVAL <= v <= MAX_INTERVAL:
-                return v
-        except (ValueError, TypeError):
-            pass
-        return default
+    _serialize_key = staticmethod(serialize_key)
+    _deserialize_key = staticmethod(deserialize_key)
+    _validate_interval = staticmethod(validate_interval)
 
     # ══════════════════════════════════════════════════════════════
     #  Interval application
@@ -1044,7 +1022,6 @@ class AppWindow(QMainWindow):
         with self.hotkey_capture_lock:
             if not self.listening_for_hotkey:
                 return
-            self.hotkey_capture_listener = None
             self.listening_for_hotkey = False
             target = self.hotkey_target
 
@@ -1079,20 +1056,13 @@ class AppWindow(QMainWindow):
             btn = getattr(self, btn_attr)
             self._safe_after(0, lambda b=btn, d=key_display: b.setText(f"Current: {d}"))
 
+        with self.hotkey_capture_lock:
+            self.hotkey_capture_listener = None
         self._save_config()
         self._safe_after(0, self.start_keyboard_listener)
         return False  # Stop this pynput listener
 
-    @staticmethod
-    def get_key_display_name(key):
-        if hasattr(key, "name"):
-            name = key.name
-            if name.startswith("f") and name[1:].isdigit():
-                return name.upper()
-            return name.capitalize()
-        elif hasattr(key, "char") and key.char:
-            return key.char.upper()
-        return str(key)
+    get_key_display_name = staticmethod(_core_get_key_display_name)
 
     # ══════════════════════════════════════════════════════════════
     #  Clicking / Key pressing logic
@@ -1129,190 +1099,161 @@ class AppWindow(QMainWindow):
         except AttributeError:
             pass
 
+    # ── Shared action loop ─────────────────────────────────────
+
+    def _set_status(self, label, text, color):
+        self._safe_after(0, lambda: label.setText(text))
+        self._safe_after(
+            0, lambda: label.setStyleSheet(f"font-weight: bold; color: {color};")
+        )
+
+    def _action_loop(
+        self, lock, flag_attr, interval_attr, action_fn, label, name, extra_attr=None
+    ):
+        next_time = time.monotonic()
+        while True:
+            with lock:
+                if not getattr(self, flag_attr):
+                    break
+                interval = getattr(self, interval_attr)
+                extra = getattr(self, extra_attr) if extra_attr else None
+            try:
+                action_fn() if extra is None else action_fn(extra)
+            except Exception as e:
+                print(f"Error in {name}: {e}")
+                with lock:
+                    setattr(self, flag_attr, False)
+                self._set_status(label, "Error", STATUS_ERROR_COLOR)
+                break
+            next_time += interval
+            sleep_dur = next_time - time.monotonic()
+            if sleep_dur > 0:
+                time.sleep(sleep_dur)
+            else:
+                next_time = time.monotonic()
+
     # ── Clicker 1 ─────────────────────────────────────────────
 
     def toggle_clicker1(self):
         with self.clicker1_lock:
-            clicking = self.clicker1_clicking
-        if clicking:
-            self.stop_clicker1()
-        else:
-            self.stop_clicker2()
-            self.start_clicker1()
+            if self.clicker1_clicking:
+                self._stop_clicker1_locked()
+            else:
+                self.stop_clicker2()
+                self._start_clicker1_locked()
 
     def start_clicker1(self):
         with self.clicker1_lock:
-            if not self.clicker1_clicking:
-                self.clicker1_clicking = True
-                self._safe_after(0, lambda: self._status1_label.setText("Clicking..."))
-                self._safe_after(
-                    0,
-                    lambda: self._status1_label.setStyleSheet(
-                        "font-weight: bold; color: #f44747;"
-                    ),
-                )
-                self.clicker1_thread = threading.Thread(
-                    target=self._click_loop1, daemon=True
-                )
-                self.clicker1_thread.start()
+            self._start_clicker1_locked()
+
+    def _start_clicker1_locked(self):
+        if not self.clicker1_clicking:
+            self.clicker1_clicking = True
+            self._set_status(self._status1_label, "Clicking...", STATUS_ACTIVE_COLOR)
+            self.clicker1_thread = threading.Thread(
+                target=self._action_loop,
+                args=(
+                    self.clicker1_lock,
+                    "clicker1_clicking",
+                    "clicker1_interval",
+                    self.perform_click,
+                    self._status1_label,
+                    "clicker 1",
+                ),
+                daemon=True,
+            )
+            self.clicker1_thread.start()
 
     def stop_clicker1(self):
         with self.clicker1_lock:
-            if self.clicker1_clicking:
-                self.clicker1_clicking = False
-                self._safe_after(0, lambda: self._status1_label.setText("Idle"))
-                self._safe_after(
-                    0,
-                    lambda: self._status1_label.setStyleSheet(
-                        "font-weight: bold; color: #4ec9b0;"
-                    ),
-                )
+            self._stop_clicker1_locked()
 
-    def _click_loop1(self):
-        while True:
-            with self.clicker1_lock:
-                if not self.clicker1_clicking:
-                    break
-                interval = self.clicker1_interval
-            try:
-                self.perform_click()
-            except Exception as e:
-                print(f"Error in clicker 1: {e}")
-                with self.clicker1_lock:
-                    self.clicker1_clicking = False
-                self._safe_after(0, lambda: self._status1_label.setText("Error"))
-                self._safe_after(
-                    0,
-                    lambda: self._status1_label.setStyleSheet(
-                        "font-weight: bold; color: #ce9178;"
-                    ),
-                )
-                break
-            time.sleep(interval)
+    def _stop_clicker1_locked(self):
+        if self.clicker1_clicking:
+            self.clicker1_clicking = False
+            self._set_status(self._status1_label, "Idle", STATUS_IDLE_COLOR)
 
     # ── Clicker 2 ─────────────────────────────────────────────
 
     def toggle_clicker2(self):
         with self.clicker2_lock:
-            clicking = self.clicker2_clicking
-        if clicking:
-            self.stop_clicker2()
-        else:
-            self.stop_clicker1()
-            self.start_clicker2()
+            if self.clicker2_clicking:
+                self._stop_clicker2_locked()
+            else:
+                self.stop_clicker1()
+                self._start_clicker2_locked()
 
     def start_clicker2(self):
         with self.clicker2_lock:
-            if not self.clicker2_clicking:
-                self.clicker2_clicking = True
-                self._safe_after(0, lambda: self._status2_label.setText("Clicking..."))
-                self._safe_after(
-                    0,
-                    lambda: self._status2_label.setStyleSheet(
-                        "font-weight: bold; color: #f44747;"
-                    ),
-                )
-                self.clicker2_thread = threading.Thread(
-                    target=self._click_loop2, daemon=True
-                )
-                self.clicker2_thread.start()
+            self._start_clicker2_locked()
+
+    def _start_clicker2_locked(self):
+        if not self.clicker2_clicking:
+            self.clicker2_clicking = True
+            self._set_status(self._status2_label, "Clicking...", STATUS_ACTIVE_COLOR)
+            self.clicker2_thread = threading.Thread(
+                target=self._action_loop,
+                args=(
+                    self.clicker2_lock,
+                    "clicker2_clicking",
+                    "clicker2_interval",
+                    self.perform_click,
+                    self._status2_label,
+                    "clicker 2",
+                ),
+                daemon=True,
+            )
+            self.clicker2_thread.start()
 
     def stop_clicker2(self):
         with self.clicker2_lock:
-            if self.clicker2_clicking:
-                self.clicker2_clicking = False
-                self._safe_after(0, lambda: self._status2_label.setText("Idle"))
-                self._safe_after(
-                    0,
-                    lambda: self._status2_label.setStyleSheet(
-                        "font-weight: bold; color: #4ec9b0;"
-                    ),
-                )
+            self._stop_clicker2_locked()
 
-    def _click_loop2(self):
-        while True:
-            with self.clicker2_lock:
-                if not self.clicker2_clicking:
-                    break
-                interval = self.clicker2_interval
-            try:
-                self.perform_click()
-            except Exception as e:
-                print(f"Error in clicker 2: {e}")
-                with self.clicker2_lock:
-                    self.clicker2_clicking = False
-                self._safe_after(0, lambda: self._status2_label.setText("Error"))
-                self._safe_after(
-                    0,
-                    lambda: self._status2_label.setStyleSheet(
-                        "font-weight: bold; color: #ce9178;"
-                    ),
-                )
-                break
-            time.sleep(interval)
+    def _stop_clicker2_locked(self):
+        if self.clicker2_clicking:
+            self.clicker2_clicking = False
+            self._set_status(self._status2_label, "Idle", STATUS_IDLE_COLOR)
 
     # ── Key Presser ───────────────────────────────────────────
 
     def toggle_keypresser(self):
         with self.keypresser_lock:
-            pressing = self.keypresser_pressing
-        if pressing:
-            self.stop_keypresser()
-        else:
-            self.start_keypresser()
+            if self.keypresser_pressing:
+                self._stop_keypresser_locked()
+            else:
+                self._start_keypresser_locked()
 
     def start_keypresser(self):
         with self.keypresser_lock:
-            if not self.keypresser_pressing:
-                self.keypresser_pressing = True
-                self._safe_after(
-                    0, lambda: self._kp_status_label.setText("Pressing...")
-                )
-                self._safe_after(
-                    0,
-                    lambda: self._kp_status_label.setStyleSheet(
-                        "font-weight: bold; color: #f44747;"
-                    ),
-                )
-                self.keypresser_thread = threading.Thread(
-                    target=self._keypresser_loop, daemon=True
-                )
-                self.keypresser_thread.start()
+            self._start_keypresser_locked()
+
+    def _start_keypresser_locked(self):
+        if not self.keypresser_pressing:
+            self.keypresser_pressing = True
+            self._set_status(self._kp_status_label, "Pressing...", STATUS_ACTIVE_COLOR)
+            self.keypresser_thread = threading.Thread(
+                target=self._action_loop,
+                args=(
+                    self.keypresser_lock,
+                    "keypresser_pressing",
+                    "keypresser_interval",
+                    self.perform_keypress,
+                    self._kp_status_label,
+                    "key presser",
+                    "keypresser_target_key",
+                ),
+                daemon=True,
+            )
+            self.keypresser_thread.start()
 
     def stop_keypresser(self):
         with self.keypresser_lock:
-            if self.keypresser_pressing:
-                self.keypresser_pressing = False
-                self._safe_after(0, lambda: self._kp_status_label.setText("Idle"))
-                self._safe_after(
-                    0,
-                    lambda: self._kp_status_label.setStyleSheet(
-                        "font-weight: bold; color: #4ec9b0;"
-                    ),
-                )
+            self._stop_keypresser_locked()
 
-    def _keypresser_loop(self):
-        while True:
-            with self.keypresser_lock:
-                if not self.keypresser_pressing:
-                    break
-                interval = self.keypresser_interval
-                target_key = self.keypresser_target_key
-            try:
-                self.perform_keypress(target_key)
-            except Exception as e:
-                print(f"Error in key presser: {e}")
-                with self.keypresser_lock:
-                    self.keypresser_pressing = False
-                self._safe_after(0, lambda: self._kp_status_label.setText("Error"))
-                self._safe_after(
-                    0,
-                    lambda: self._kp_status_label.setStyleSheet(
-                        "font-weight: bold; color: #ce9178;"
-                    ),
-                )
-                break
-            time.sleep(interval)
+    def _stop_keypresser_locked(self):
+        if self.keypresser_pressing:
+            self.keypresser_pressing = False
+            self._set_status(self._kp_status_label, "Idle", STATUS_IDLE_COLOR)
 
     # ── Emergency Stop ────────────────────────────────────────
 
@@ -1327,8 +1268,10 @@ class AppWindow(QMainWindow):
         if self.keyboard_listener:
             try:
                 self.keyboard_listener.stop()
+                self.keyboard_listener.join(timeout=1.0)
             except Exception:
                 pass
+            self.keyboard_listener = None
         self.keyboard_listener = keyboard.Listener(on_press=self.on_hotkey_press)
         self.keyboard_listener.start()
 
@@ -1336,8 +1279,10 @@ class AppWindow(QMainWindow):
         if self.keyboard_listener:
             try:
                 self.keyboard_listener.stop()
+                self.keyboard_listener.join(timeout=1.0)
             except Exception:
                 pass
+            self.keyboard_listener = None
 
     # ── Settings callbacks ────────────────────────────────────
 
@@ -1458,6 +1403,10 @@ class AppWindow(QMainWindow):
         return hashlib.sha1(header + content).hexdigest()
 
     def _verify_file_against_github(self, tag_name, filename, content, headers):
+        # NOTE: Both payload and SHA come from GitHub over HTTPS. This verifies
+        # transport integrity, not authenticity. A MITM on the TLS connection
+        # could spoof both. For stronger guarantees, add GPG/minisign signature
+        # verification with a pinned public key.
         import urllib.request
 
         api_url = (
@@ -1478,7 +1427,6 @@ class AppWindow(QMainWindow):
 
     def _apply_update(self, release_data):
         import os as os_module
-        import shutil
         import urllib.error
         import urllib.request
 
@@ -1520,6 +1468,26 @@ class AppWindow(QMainWindow):
 
         try:
             tag_name = release_data.get("tag_name", "main")
+            if not re.match(r"^v?\d+\.\d+(\.\d+)?(-[\w.]+)?$", tag_name):
+                raise ValueError(f"Invalid tag format: {tag_name}")
+
+            if getattr(sys, "frozen", False):
+                self._safe_after(
+                    0,
+                    lambda: (
+                        _close_progress(),
+                        QMessageBox.information(
+                            self,
+                            "Update Available",
+                            f"A new version ({tag_name}) is available.\n\n"
+                            "Frozen binaries cannot self-update.\n"
+                            "Please download the latest release from GitHub.",
+                        ),
+                        QDesktopServices.openUrl(QUrl(GITHUB_RELEASES_URL)),
+                    ),
+                )
+                return
+
             download_url = f"{GITHUB_RAW_URL}/{tag_name}/autoclicker.py"
             headers = {"User-Agent": f"DualAutoClicker/{__version__}"}
 

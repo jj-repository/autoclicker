@@ -1,7 +1,10 @@
 #!/bin/bash
+set -euo pipefail
 # Build script for Linux executables
 
 echo "Building Linux executables..."
+
+command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 not found"; exit 1; }
 
 # Create virtual environment for build if needed
 VENV_DIR=".build_venv"
@@ -13,25 +16,19 @@ fi
 # Activate virtual environment
 source "$VENV_DIR/bin/activate"
 
-# Install PyInstaller in virtual environment
-if ! command -v pyinstaller &> /dev/null; then
-    echo "PyInstaller not found. Installing..."
-    pip install pyinstaller
-fi
-
-# Install project dependencies
-pip install -r requirements-linux.txt 2>/dev/null || true
+# Install project dependencies and build tools
+pip install -r requirements-linux.txt pyinstaller==6.13.0
 
 # Clean previous builds
 rm -rf build dist *.spec
 
 # Build evdev version (recommended - includes keyboard presser)
 echo "Building autoclicker-evdev (recommended version)..."
-pyinstaller --onefile --name autoclicker-evdev --add-data "icon.png:." --add-data "takodachi.png:." autoclicker_evdev.py
+pyinstaller --onefile --name autoclicker-evdev --hidden-import autoclicker_core --add-data "icon.png:." --add-data "takodachi.png:." autoclicker_evdev.py
 
 # Build basic version
 echo "Building autoclicker-basic..."
-pyinstaller --onefile --name autoclicker-basic --add-data "icon.png:." --add-data "takodachi.png:." autoclicker.py
+pyinstaller --onefile --name autoclicker-basic --hidden-import autoclicker_core --add-data "icon.png:." --add-data "takodachi.png:." autoclicker.py
 
 echo ""
 echo "Build complete! Executables are in the dist/ directory:"

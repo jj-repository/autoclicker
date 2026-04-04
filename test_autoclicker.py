@@ -1,544 +1,688 @@
 #!/usr/bin/env python3
-"""Unit tests for autoclicker_evdev.py"""
-import unittest
+"""Unit tests for autoclicker.py (PyQt6) and autoclicker_evdev.py (tkinter/evdev).
+
+Tests call actual production methods — no re-implementations.
+"""
+
+import hashlib
+import json
 import sys
 import tempfile
-import json
+import threading
+import time
+import types
+import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-# Mock the evdev module since tests may run on non-Linux systems
-sys.modules['evdev'] = MagicMock()
-sys.modules['evdev'].UInput = MagicMock()
-sys.modules['evdev'].ecodes = MagicMock()
-sys.modules['evdev'].ecodes.KEY_SPACE = 57
-sys.modules['evdev'].ecodes.KEY_ENTER = 28
-sys.modules['evdev'].ecodes.KEY_TAB = 15
-sys.modules['evdev'].ecodes.KEY_ESC = 1
-sys.modules['evdev'].ecodes.KEY_BACKSPACE = 14
-sys.modules['evdev'].ecodes.KEY_DELETE = 111
-sys.modules['evdev'].ecodes.KEY_UP = 103
-sys.modules['evdev'].ecodes.KEY_DOWN = 108
-sys.modules['evdev'].ecodes.KEY_LEFT = 105
-sys.modules['evdev'].ecodes.KEY_RIGHT = 106
-sys.modules['evdev'].ecodes.KEY_HOME = 102
-sys.modules['evdev'].ecodes.KEY_END = 107
-sys.modules['evdev'].ecodes.KEY_PAGEUP = 104
-sys.modules['evdev'].ecodes.KEY_PAGEDOWN = 109
-sys.modules['evdev'].ecodes.KEY_INSERT = 110
-sys.modules['evdev'].ecodes.KEY_LEFTSHIFT = 42
-sys.modules['evdev'].ecodes.KEY_RIGHTSHIFT = 54
-sys.modules['evdev'].ecodes.KEY_LEFTCTRL = 29
-sys.modules['evdev'].ecodes.KEY_RIGHTCTRL = 97
-sys.modules['evdev'].ecodes.KEY_LEFTALT = 56
-sys.modules['evdev'].ecodes.KEY_RIGHTALT = 100
-sys.modules['evdev'].ecodes.KEY_F1 = 59
-sys.modules['evdev'].ecodes.KEY_F2 = 60
-sys.modules['evdev'].ecodes.KEY_F3 = 61
-sys.modules['evdev'].ecodes.KEY_F4 = 62
-sys.modules['evdev'].ecodes.KEY_F5 = 63
-sys.modules['evdev'].ecodes.KEY_F6 = 64
-sys.modules['evdev'].ecodes.KEY_F7 = 65
-sys.modules['evdev'].ecodes.KEY_F8 = 66
-sys.modules['evdev'].ecodes.KEY_F9 = 67
-sys.modules['evdev'].ecodes.KEY_F10 = 68
-sys.modules['evdev'].ecodes.KEY_F11 = 87
-sys.modules['evdev'].ecodes.KEY_F12 = 88
-sys.modules['evdev'].ecodes.KEY_A = 30
-sys.modules['evdev'].ecodes.KEY_B = 48
-sys.modules['evdev'].ecodes.KEY_Z = 44
-sys.modules['evdev'].ecodes.KEY_0 = 11
-sys.modules['evdev'].ecodes.KEY_1 = 2
-sys.modules['evdev'].ecodes.KEY_9 = 10
-sys.modules['evdev'].ecodes.BTN_LEFT = 272
-sys.modules['evdev'].ecodes.BTN_RIGHT = 273
-sys.modules['evdev'].ecodes.BTN_MIDDLE = 274
-sys.modules['evdev'].ecodes.EV_KEY = 1
-sys.modules['evdev'].ecodes.KEY_KPDOT = 83
+# ── Mock evdev (Linux-only) ──────────────────────────────────────────
+sys.modules["evdev"] = MagicMock()
+sys.modules["evdev"].UInput = MagicMock()
+sys.modules["evdev"].ecodes = MagicMock()
+sys.modules["evdev"].ecodes.KEY_SPACE = 57
+sys.modules["evdev"].ecodes.KEY_ENTER = 28
+sys.modules["evdev"].ecodes.KEY_TAB = 15
+sys.modules["evdev"].ecodes.KEY_ESC = 1
+sys.modules["evdev"].ecodes.KEY_BACKSPACE = 14
+sys.modules["evdev"].ecodes.KEY_DELETE = 111
+sys.modules["evdev"].ecodes.KEY_UP = 103
+sys.modules["evdev"].ecodes.KEY_DOWN = 108
+sys.modules["evdev"].ecodes.KEY_LEFT = 105
+sys.modules["evdev"].ecodes.KEY_RIGHT = 106
+sys.modules["evdev"].ecodes.KEY_HOME = 102
+sys.modules["evdev"].ecodes.KEY_END = 107
+sys.modules["evdev"].ecodes.KEY_PAGEUP = 104
+sys.modules["evdev"].ecodes.KEY_PAGEDOWN = 109
+sys.modules["evdev"].ecodes.KEY_INSERT = 110
+sys.modules["evdev"].ecodes.KEY_LEFTSHIFT = 42
+sys.modules["evdev"].ecodes.KEY_RIGHTSHIFT = 54
+sys.modules["evdev"].ecodes.KEY_LEFTCTRL = 29
+sys.modules["evdev"].ecodes.KEY_RIGHTCTRL = 97
+sys.modules["evdev"].ecodes.KEY_LEFTALT = 56
+sys.modules["evdev"].ecodes.KEY_RIGHTALT = 100
+sys.modules["evdev"].ecodes.KEY_F1 = 59
+sys.modules["evdev"].ecodes.KEY_F2 = 60
+sys.modules["evdev"].ecodes.KEY_F3 = 61
+sys.modules["evdev"].ecodes.KEY_F4 = 62
+sys.modules["evdev"].ecodes.KEY_F5 = 63
+sys.modules["evdev"].ecodes.KEY_F6 = 64
+sys.modules["evdev"].ecodes.KEY_F7 = 65
+sys.modules["evdev"].ecodes.KEY_F8 = 66
+sys.modules["evdev"].ecodes.KEY_F9 = 67
+sys.modules["evdev"].ecodes.KEY_F10 = 68
+sys.modules["evdev"].ecodes.KEY_F11 = 87
+sys.modules["evdev"].ecodes.KEY_F12 = 88
+sys.modules["evdev"].ecodes.KEY_A = 30
+sys.modules["evdev"].ecodes.KEY_B = 48
+sys.modules["evdev"].ecodes.KEY_Z = 44
+sys.modules["evdev"].ecodes.KEY_0 = 11
+sys.modules["evdev"].ecodes.KEY_1 = 2
+sys.modules["evdev"].ecodes.KEY_9 = 10
+sys.modules["evdev"].ecodes.BTN_LEFT = 272
+sys.modules["evdev"].ecodes.BTN_RIGHT = 273
+sys.modules["evdev"].ecodes.BTN_MIDDLE = 274
+sys.modules["evdev"].ecodes.EV_KEY = 1
+sys.modules["evdev"].ecodes.KEY_KPDOT = 83
 
-# Mock pynput
-mock_key = MagicMock()
-mock_key.f6 = MagicMock(name='f6')
-mock_key.f6.name = 'f6'
-mock_key.f7 = MagicMock(name='f7')
-mock_key.f7.name = 'f7'
-mock_key.f8 = MagicMock(name='f8')
-mock_key.f8.name = 'f8'
-mock_key.f9 = MagicMock(name='f9')
-mock_key.f9.name = 'f9'
+# ── Mock pynput with SimpleNamespace-based key objects ───────────────
+# SimpleNamespace avoids the MagicMock `.name` property issue.
+
+_mock_key_f6 = types.SimpleNamespace(name="f6")
+_mock_key_f7 = types.SimpleNamespace(name="f7")
+_mock_key_f8 = types.SimpleNamespace(name="f8")
+_mock_key_f9 = types.SimpleNamespace(name="f9")
+
+mock_key = types.SimpleNamespace(
+    # F-keys used in tests and by KeyCaptureDialog class-level code
+    **{f"f{i}": types.SimpleNamespace(name=f"f{i}") for i in range(1, 13)},
+    # Special keys referenced at class level in autoclicker.py KeyCaptureDialog
+    space=types.SimpleNamespace(name="space"),
+    enter=types.SimpleNamespace(name="enter"),
+    tab=types.SimpleNamespace(name="tab"),
+    esc=types.SimpleNamespace(name="esc"),
+    backspace=types.SimpleNamespace(name="backspace"),
+    delete=types.SimpleNamespace(name="delete"),
+    up=types.SimpleNamespace(name="up"),
+    down=types.SimpleNamespace(name="down"),
+    left=types.SimpleNamespace(name="left"),
+    right=types.SimpleNamespace(name="right"),
+    home=types.SimpleNamespace(name="home"),
+    end=types.SimpleNamespace(name="end"),
+    page_up=types.SimpleNamespace(name="page_up"),
+    page_down=types.SimpleNamespace(name="page_down"),
+    insert=types.SimpleNamespace(name="insert"),
+    shift_l=types.SimpleNamespace(name="shift_l"),
+    ctrl_l=types.SimpleNamespace(name="ctrl_l"),
+    alt_l=types.SimpleNamespace(name="alt_l"),
+)
+# Keep handy references for test assertions
+_mock_key_f6 = mock_key.f6
+_mock_key_f7 = mock_key.f7
+_mock_key_f8 = mock_key.f8
+_mock_key_f9 = mock_key.f9
 
 mock_keycode = MagicMock()
-mock_keycode.from_char = MagicMock(return_value=MagicMock(char='a'))
+mock_keycode.from_char = lambda c: types.SimpleNamespace(char=c)
 
 mock_keyboard_module = MagicMock()
 mock_keyboard_module.Key = mock_key
 mock_keyboard_module.KeyCode = mock_keycode
 mock_keyboard_module.Listener = MagicMock()
 
-sys.modules['pynput'] = MagicMock()
-sys.modules['pynput.keyboard'] = mock_keyboard_module
+sys.modules["pynput"] = MagicMock()
+sys.modules["pynput.keyboard"] = mock_keyboard_module
+
+# ── Mock PyQt6 for autoclicker.py import ─────────────────────────────
+# QMainWindow/QDialog/QObject must be real classes (not MagicMock) so that
+# AppWindow and KeyCaptureDialog are defined as proper classes whose
+# @staticmethod / instance methods are accessible from tests.
+_qt_widgets = MagicMock()
+_qt_widgets.QMainWindow = type("QMainWindow", (), {})
+_qt_widgets.QDialog = type("QDialog", (), {"DialogCode": MagicMock()})
+
+_qt_core = MagicMock()
+_qt_core.QObject = type("QObject", (), {})
+_qt_core.pyqtSignal = lambda *a, **kw: MagicMock()
+_qt_core.Qt.Key = MagicMock()
+for _i in range(1, 13):
+    setattr(_qt_core.Qt.Key, f"Key_F{_i}", 0x01000030 + _i - 1)
+
+for mod, mock_obj in [
+    ("PyQt6", MagicMock()),
+    ("PyQt6.QtCore", _qt_core),
+    ("PyQt6.QtGui", MagicMock()),
+    ("PyQt6.QtWidgets", _qt_widgets),
+]:
+    sys.modules[mod] = mock_obj
+
+# ── Import production modules (must follow mocks) ───────────────────
+from autoclicker_evdev import (  # noqa: E402
+    DualAutoClicker,
+    MIN_INTERVAL,
+    MAX_INTERVAL,
+    DEFAULT_CLICKER1_INTERVAL,
+    DEFAULT_CLICKER2_INTERVAL,
+    DEFAULT_KEYPRESSER_INTERVAL,
+)
+from autoclicker import AppWindow  # noqa: E402
+
+
+# ── Helpers ──────────────────────────────────────────────────────────
+
+
+def _make_evdev_obj() -> DualAutoClicker:
+    """Create a DualAutoClicker without running __init__."""
+    return object.__new__(DualAutoClicker)
+
+
+def _make_special_key(name: str):
+    """Create a SimpleNamespace mimicking pynput Key with .name."""
+    return types.SimpleNamespace(name=name)
+
+
+def _make_char_key(char: str):
+    """Create a SimpleNamespace mimicking pynput KeyCode with .char."""
+    return types.SimpleNamespace(char=char)
+
+
+# ═════════════════════════════════════════════════════════════════════
+#  Tests
+# ═════════════════════════════════════════════════════════════════════
 
 
 class TestValidateInterval(unittest.TestCase):
-    """Tests for _validate_interval method"""
+    """Call _validate_interval on both backends."""
 
     def setUp(self):
-        # Create a mock instance with the method
-        self.clicker = MagicMock()
-        # Import the actual validate logic
-        from autoclicker_evdev import MIN_INTERVAL, MAX_INTERVAL, DEFAULT_CLICKER1_INTERVAL
-        self.MIN_INTERVAL = MIN_INTERVAL
-        self.MAX_INTERVAL = MAX_INTERVAL
+        self.evdev_obj = _make_evdev_obj()
         self.DEFAULT = DEFAULT_CLICKER1_INTERVAL
 
-    def _validate_interval(self, interval, default):
-        """Replicate the validation logic for testing"""
-        try:
-            interval_float = float(interval)
-            if self.MIN_INTERVAL <= interval_float <= self.MAX_INTERVAL:
-                return interval_float
-        except (ValueError, TypeError):
-            pass
-        return default
+    # -- valid --
 
     def test_valid_interval(self):
-        """Test valid intervals within bounds"""
-        self.assertEqual(self._validate_interval(0.1, self.DEFAULT), 0.1)
-        self.assertEqual(self._validate_interval(1.0, self.DEFAULT), 1.0)
-        self.assertEqual(self._validate_interval(30.0, self.DEFAULT), 30.0)
+        for val in (0.1, 1.0, 30.0):
+            self.assertEqual(AppWindow._validate_interval(val, self.DEFAULT), val)
+            self.assertEqual(self.evdev_obj._validate_interval(val, self.DEFAULT), val)
 
     def test_string_interval(self):
-        """Test string conversion"""
-        self.assertEqual(self._validate_interval("0.5", self.DEFAULT), 0.5)
-        self.assertEqual(self._validate_interval("1", self.DEFAULT), 1.0)
+        self.assertEqual(AppWindow._validate_interval("0.5", self.DEFAULT), 0.5)
+        self.assertEqual(self.evdev_obj._validate_interval("1", self.DEFAULT), 1.0)
 
-    def test_below_minimum(self):
-        """Test interval below minimum returns default"""
-        result = self._validate_interval(0.001, self.DEFAULT)
-        self.assertEqual(result, self.DEFAULT)
-
-    def test_above_maximum(self):
-        """Test interval above maximum returns default"""
-        result = self._validate_interval(100.0, self.DEFAULT)
-        self.assertEqual(result, self.DEFAULT)
-
-    def test_invalid_string(self):
-        """Test invalid string returns default"""
-        self.assertEqual(self._validate_interval("not a number", self.DEFAULT), self.DEFAULT)
-
-    def test_none_value(self):
-        """Test None returns default"""
-        self.assertEqual(self._validate_interval(None, self.DEFAULT), self.DEFAULT)
+    # -- boundary --
 
     def test_boundary_minimum(self):
-        """Test exactly at minimum boundary"""
-        self.assertEqual(self._validate_interval(self.MIN_INTERVAL, self.DEFAULT), self.MIN_INTERVAL)
+        self.assertEqual(
+            AppWindow._validate_interval(MIN_INTERVAL, self.DEFAULT), MIN_INTERVAL
+        )
+        self.assertEqual(
+            self.evdev_obj._validate_interval(MIN_INTERVAL, self.DEFAULT), MIN_INTERVAL
+        )
 
     def test_boundary_maximum(self):
-        """Test exactly at maximum boundary"""
-        self.assertEqual(self._validate_interval(self.MAX_INTERVAL, self.DEFAULT), self.MAX_INTERVAL)
+        self.assertEqual(
+            AppWindow._validate_interval(MAX_INTERVAL, self.DEFAULT), MAX_INTERVAL
+        )
+        self.assertEqual(
+            self.evdev_obj._validate_interval(MAX_INTERVAL, self.DEFAULT), MAX_INTERVAL
+        )
+
+    # -- out of range --
+
+    def test_below_minimum(self):
+        self.assertEqual(
+            AppWindow._validate_interval(0.001, self.DEFAULT), self.DEFAULT
+        )
+        self.assertEqual(
+            self.evdev_obj._validate_interval(0.001, self.DEFAULT), self.DEFAULT
+        )
+
+    def test_above_maximum(self):
+        self.assertEqual(
+            AppWindow._validate_interval(100.0, self.DEFAULT), self.DEFAULT
+        )
+        self.assertEqual(
+            self.evdev_obj._validate_interval(100.0, self.DEFAULT), self.DEFAULT
+        )
 
     def test_negative_interval(self):
-        """Test negative interval returns default"""
-        self.assertEqual(self._validate_interval(-1.0, self.DEFAULT), self.DEFAULT)
+        self.assertEqual(AppWindow._validate_interval(-1.0, self.DEFAULT), self.DEFAULT)
+        self.assertEqual(
+            self.evdev_obj._validate_interval(-1.0, self.DEFAULT), self.DEFAULT
+        )
+
+    # -- invalid types --
+
+    def test_invalid_string(self):
+        self.assertEqual(
+            AppWindow._validate_interval("not a number", self.DEFAULT), self.DEFAULT
+        )
+        self.assertEqual(
+            self.evdev_obj._validate_interval("not a number", self.DEFAULT),
+            self.DEFAULT,
+        )
+
+    def test_none_value(self):
+        self.assertEqual(AppWindow._validate_interval(None, self.DEFAULT), self.DEFAULT)
+        self.assertEqual(
+            self.evdev_obj._validate_interval(None, self.DEFAULT), self.DEFAULT
+        )
 
 
 class TestKeyMapping(unittest.TestCase):
-    """Tests for _tk_key_to_evdev method"""
+    """Call DualAutoClicker._tk_key_to_evdev on a real evdev instance."""
 
     def setUp(self):
-        from evdev import ecodes as e
-        self.e = e
+        self.obj = _make_evdev_obj()
+        from evdev import ecodes
 
-    def _tk_key_to_evdev(self, tk_key):
-        """Replicate the key mapping logic for testing"""
-        key_map = {
-            'space': self.e.KEY_SPACE,
-            'Return': self.e.KEY_ENTER,
-            'Tab': self.e.KEY_TAB,
-            'Escape': self.e.KEY_ESC,
-            'BackSpace': self.e.KEY_BACKSPACE,
-            'Delete': self.e.KEY_DELETE,
-            'Up': self.e.KEY_UP,
-            'Down': self.e.KEY_DOWN,
-            'Left': self.e.KEY_LEFT,
-            'Right': self.e.KEY_RIGHT,
-            'Home': self.e.KEY_HOME,
-            'End': self.e.KEY_END,
-            'Page_Up': self.e.KEY_PAGEUP,
-            'Page_Down': self.e.KEY_PAGEDOWN,
-            'Insert': self.e.KEY_INSERT,
-            'Shift_L': self.e.KEY_LEFTSHIFT,
-            'Shift_R': self.e.KEY_RIGHTSHIFT,
-            'Control_L': self.e.KEY_LEFTCTRL,
-            'Control_R': self.e.KEY_RIGHTCTRL,
-            'Alt_L': self.e.KEY_LEFTALT,
-            'Alt_R': self.e.KEY_RIGHTALT,
-        }
-
-        if tk_key in key_map:
-            return key_map[tk_key]
-
-        if tk_key.startswith('F') and tk_key[1:].isdigit():
-            f_num = int(tk_key[1:])
-            if 1 <= f_num <= 12:
-                return getattr(self.e, f'KEY_F{f_num}', None)
-
-        if len(tk_key) == 1 and tk_key.isalpha():
-            return getattr(self.e, f'KEY_{tk_key.upper()}', None)
-
-        if len(tk_key) == 1 and tk_key.isdigit():
-            return getattr(self.e, f'KEY_{tk_key}', None)
-
-        return None
+        self.e = ecodes
 
     def test_special_keys(self):
-        """Test special key mapping"""
-        self.assertEqual(self._tk_key_to_evdev('space'), self.e.KEY_SPACE)
-        self.assertEqual(self._tk_key_to_evdev('Return'), self.e.KEY_ENTER)
-        self.assertEqual(self._tk_key_to_evdev('Tab'), self.e.KEY_TAB)
-        self.assertEqual(self._tk_key_to_evdev('Escape'), self.e.KEY_ESC)
+        self.assertEqual(self.obj._tk_key_to_evdev("space"), self.e.KEY_SPACE)
+        self.assertEqual(self.obj._tk_key_to_evdev("Return"), self.e.KEY_ENTER)
+        self.assertEqual(self.obj._tk_key_to_evdev("Tab"), self.e.KEY_TAB)
+        self.assertEqual(self.obj._tk_key_to_evdev("Escape"), self.e.KEY_ESC)
 
     def test_arrow_keys(self):
-        """Test arrow key mapping"""
-        self.assertEqual(self._tk_key_to_evdev('Up'), self.e.KEY_UP)
-        self.assertEqual(self._tk_key_to_evdev('Down'), self.e.KEY_DOWN)
-        self.assertEqual(self._tk_key_to_evdev('Left'), self.e.KEY_LEFT)
-        self.assertEqual(self._tk_key_to_evdev('Right'), self.e.KEY_RIGHT)
+        self.assertEqual(self.obj._tk_key_to_evdev("Up"), self.e.KEY_UP)
+        self.assertEqual(self.obj._tk_key_to_evdev("Down"), self.e.KEY_DOWN)
+        self.assertEqual(self.obj._tk_key_to_evdev("Left"), self.e.KEY_LEFT)
+        self.assertEqual(self.obj._tk_key_to_evdev("Right"), self.e.KEY_RIGHT)
 
     def test_function_keys(self):
-        """Test function key mapping"""
-        self.assertEqual(self._tk_key_to_evdev('F1'), self.e.KEY_F1)
-        self.assertEqual(self._tk_key_to_evdev('F6'), self.e.KEY_F6)
-        self.assertEqual(self._tk_key_to_evdev('F12'), self.e.KEY_F12)
+        self.assertEqual(self.obj._tk_key_to_evdev("F1"), self.e.KEY_F1)
+        self.assertEqual(self.obj._tk_key_to_evdev("F6"), self.e.KEY_F6)
+        self.assertEqual(self.obj._tk_key_to_evdev("F12"), self.e.KEY_F12)
 
     def test_letter_keys(self):
-        """Test letter key mapping"""
-        self.assertEqual(self._tk_key_to_evdev('a'), self.e.KEY_A)
-        self.assertEqual(self._tk_key_to_evdev('A'), self.e.KEY_A)
-        self.assertEqual(self._tk_key_to_evdev('z'), self.e.KEY_Z)
+        self.assertEqual(self.obj._tk_key_to_evdev("a"), self.e.KEY_A)
+        self.assertEqual(self.obj._tk_key_to_evdev("z"), self.e.KEY_Z)
 
     def test_number_keys(self):
-        """Test number key mapping"""
-        self.assertEqual(self._tk_key_to_evdev('0'), self.e.KEY_0)
-        self.assertEqual(self._tk_key_to_evdev('1'), self.e.KEY_1)
-        self.assertEqual(self._tk_key_to_evdev('9'), self.e.KEY_9)
+        self.assertEqual(self.obj._tk_key_to_evdev("0"), self.e.KEY_0)
+        self.assertEqual(self.obj._tk_key_to_evdev("1"), self.e.KEY_1)
+        self.assertEqual(self.obj._tk_key_to_evdev("9"), self.e.KEY_9)
 
     def test_modifier_keys(self):
-        """Test modifier key mapping"""
-        self.assertEqual(self._tk_key_to_evdev('Shift_L'), self.e.KEY_LEFTSHIFT)
-        self.assertEqual(self._tk_key_to_evdev('Control_L'), self.e.KEY_LEFTCTRL)
-        self.assertEqual(self._tk_key_to_evdev('Alt_L'), self.e.KEY_LEFTALT)
+        self.assertEqual(self.obj._tk_key_to_evdev("Shift_L"), self.e.KEY_LEFTSHIFT)
+        self.assertEqual(self.obj._tk_key_to_evdev("Control_L"), self.e.KEY_LEFTCTRL)
+        self.assertEqual(self.obj._tk_key_to_evdev("Alt_L"), self.e.KEY_LEFTALT)
 
     def test_unknown_key_returns_none(self):
-        """Test unknown keys return None"""
-        self.assertIsNone(self._tk_key_to_evdev('unknown'))
-        self.assertIsNone(self._tk_key_to_evdev(''))
+        self.assertIsNone(self.obj._tk_key_to_evdev("unknown"))
+        self.assertIsNone(self.obj._tk_key_to_evdev(""))
 
 
 class TestKeySerialization(unittest.TestCase):
-    """Tests for _serialize_key and _deserialize_key methods"""
+    """Call _serialize_key / _deserialize_key on both backends."""
 
-    def _serialize_key(self, key):
-        """Replicate serialization logic"""
-        if hasattr(key, 'name'):
-            return {'type': 'special', 'name': key.name}
-        elif hasattr(key, 'char'):
-            return {'type': 'char', 'char': key.char}
-        else:
-            return {'type': 'special', 'name': 'f6'}
+    def setUp(self):
+        self.evdev_obj = _make_evdev_obj()
 
-    def _deserialize_key(self, key_data):
-        """Replicate deserialization logic"""
-        from pynput.keyboard import Key, KeyCode
+    # -- serialize --
 
-        if not isinstance(key_data, dict):
-            return Key.f6
+    def test_serialize_special_key_pyqt(self):
+        key = _make_special_key("f6")
+        result = AppWindow._serialize_key(key)
+        self.assertEqual(result, {"type": "special", "name": "f6"})
 
-        key_type = key_data.get('type', 'special')
-        if not isinstance(key_type, str):
-            return Key.f6
+    def test_serialize_special_key_evdev(self):
+        key = _make_special_key("f7")
+        result = self.evdev_obj._serialize_key(key)
+        self.assertEqual(result, {"type": "special", "name": "f7"})
 
-        if key_type == 'special':
-            name = key_data.get('name', 'f6')
-            if not isinstance(name, str):
-                return Key.f6
-            return getattr(Key, name, Key.f6)
-        elif key_type == 'char':
-            char = key_data.get('char')
-            if char and isinstance(char, str) and len(char) == 1:
-                return KeyCode.from_char(char)
-            return Key.f6
-        else:
-            return Key.f6
+    def test_serialize_char_key_pyqt(self):
+        key = _make_char_key("a")
+        result = AppWindow._serialize_key(key)
+        self.assertEqual(result, {"type": "char", "char": "a"})
 
-    def test_serialize_special_key(self):
-        """Test serialization of special keys"""
-        key = MagicMock()
-        key.name = 'f6'
-        result = self._serialize_key(key)
-        self.assertEqual(result, {'type': 'special', 'name': 'f6'})
+    def test_serialize_char_key_evdev(self):
+        key = _make_char_key("z")
+        result = self.evdev_obj._serialize_key(key)
+        self.assertEqual(result, {"type": "char", "char": "z"})
 
-    def test_serialize_char_key(self):
-        """Test serialization of character keys"""
-        key = MagicMock(spec=['char'])
-        key.char = 'a'
-        del key.name  # Ensure 'name' attribute doesn't exist
-        result = self._serialize_key(key)
-        self.assertEqual(result, {'type': 'char', 'char': 'a'})
+    def test_serialize_fallback_pyqt(self):
+        key = object()  # no .name, no .char
+        result = AppWindow._serialize_key(key)
+        self.assertEqual(result, {"type": "special", "name": "f6"})
 
-    def test_deserialize_invalid_type(self):
-        """Test deserialization with invalid data type"""
-        from pynput.keyboard import Key
-        result = self._deserialize_key("not a dict")
-        self.assertEqual(result, Key.f6)
-        result = self._deserialize_key(None)
-        self.assertEqual(result, Key.f6)
-        result = self._deserialize_key(123)
-        self.assertEqual(result, Key.f6)
+    def test_serialize_fallback_evdev(self):
+        key = object()
+        result = self.evdev_obj._serialize_key(key)
+        self.assertEqual(result, {"type": "special", "name": "f6"})
 
-    def test_deserialize_special_key(self):
-        """Test deserialization of special keys"""
-        from pynput.keyboard import Key
-        result = self._deserialize_key({'type': 'special', 'name': 'f7'})
-        self.assertEqual(result, Key.f7)
+    # -- deserialize --
 
-    def test_deserialize_missing_char(self):
-        """Test deserialization with missing char"""
-        from pynput.keyboard import Key
-        result = self._deserialize_key({'type': 'char'})
-        self.assertEqual(result, Key.f6)
+    def test_deserialize_special_key_pyqt(self):
+        result = AppWindow._deserialize_key({"type": "special", "name": "f7"})
+        self.assertEqual(result, mock_key.f7)
 
-    def test_deserialize_invalid_char(self):
-        """Test deserialization with invalid char"""
-        from pynput.keyboard import Key
-        result = self._deserialize_key({'type': 'char', 'char': 'ab'})
-        self.assertEqual(result, Key.f6)
+    def test_deserialize_special_key_evdev(self):
+        result = self.evdev_obj._deserialize_key({"type": "special", "name": "f7"})
+        self.assertEqual(result, mock_key.f7)
 
-    def test_deserialize_unknown_type(self):
-        """Test deserialization with unknown type"""
-        from pynput.keyboard import Key
-        result = self._deserialize_key({'type': 'unknown', 'name': 'test'})
-        self.assertEqual(result, Key.f6)
+    def test_deserialize_char_key_pyqt(self):
+        result = AppWindow._deserialize_key({"type": "char", "char": "a"})
+        self.assertEqual(result.char, "a")
+
+    def test_deserialize_char_key_evdev(self):
+        result = self.evdev_obj._deserialize_key({"type": "char", "char": "x"})
+        self.assertEqual(result.char, "x")
+
+    def test_deserialize_invalid_type_pyqt(self):
+        for bad in ("not a dict", None, 123, []):
+            result = AppWindow._deserialize_key(bad)
+            self.assertEqual(result, mock_key.f6)
+
+    def test_deserialize_invalid_type_evdev(self):
+        for bad in ("not a dict", None, 123, []):
+            result = self.evdev_obj._deserialize_key(bad)
+            self.assertEqual(result, mock_key.f6)
+
+    def test_deserialize_missing_char_pyqt(self):
+        result = AppWindow._deserialize_key({"type": "char"})
+        self.assertEqual(result, mock_key.f6)
+
+    def test_deserialize_missing_char_evdev(self):
+        result = self.evdev_obj._deserialize_key({"type": "char"})
+        self.assertEqual(result, mock_key.f6)
+
+    def test_deserialize_invalid_char_pyqt(self):
+        result = AppWindow._deserialize_key({"type": "char", "char": "ab"})
+        self.assertEqual(result, mock_key.f6)
+
+    def test_deserialize_unknown_type_pyqt(self):
+        result = AppWindow._deserialize_key({"type": "unknown", "name": "test"})
+        self.assertEqual(result, mock_key.f6)
+
+    def test_deserialize_unknown_type_evdev(self):
+        result = self.evdev_obj._deserialize_key({"type": "unknown", "name": "test"})
+        self.assertEqual(result, mock_key.f6)
+
+    def test_deserialize_non_string_type_field(self):
+        result = AppWindow._deserialize_key({"type": 42})
+        self.assertEqual(result, mock_key.f6)
+
+    def test_deserialize_non_string_name_field(self):
+        result = AppWindow._deserialize_key({"type": "special", "name": 999})
+        self.assertEqual(result, mock_key.f6)
+
+    # -- round-trip --
+
+    def test_roundtrip_special_pyqt(self):
+        key = _make_special_key("f8")
+        serialized = AppWindow._serialize_key(key)
+        deserialized = AppWindow._deserialize_key(serialized)
+        self.assertEqual(deserialized, mock_key.f8)
+
+    def test_roundtrip_char_pyqt(self):
+        key = _make_char_key("m")
+        serialized = AppWindow._serialize_key(key)
+        deserialized = AppWindow._deserialize_key(serialized)
+        self.assertEqual(deserialized.char, "m")
+
+    def test_roundtrip_special_evdev(self):
+        key = _make_special_key("f9")
+        serialized = self.evdev_obj._serialize_key(key)
+        deserialized = self.evdev_obj._deserialize_key(serialized)
+        self.assertEqual(deserialized, mock_key.f9)
 
 
 class TestKeyDisplayName(unittest.TestCase):
-    """Tests for get_key_display_name method"""
+    """Call get_key_display_name on both backends."""
 
-    def get_key_display_name(self, key):
-        """Replicate display name logic"""
-        if hasattr(key, 'name'):
-            name = key.name
-            if name.startswith('f') and name[1:].isdigit():
-                return name.upper()
-            return name.capitalize()
-        elif hasattr(key, 'char') and key.char:
-            return key.char.upper()
-        else:
-            return str(key)
+    def setUp(self):
+        self.evdev_obj = _make_evdev_obj()
 
-    def test_function_key_display(self):
-        """Test function key display names"""
-        key = MagicMock()
-        key.name = 'f6'
-        self.assertEqual(self.get_key_display_name(key), 'F6')
+    def test_function_key_display_pyqt(self):
+        self.assertEqual(AppWindow.get_key_display_name(_make_special_key("f6")), "F6")
+        self.assertEqual(
+            AppWindow.get_key_display_name(_make_special_key("f12")), "F12"
+        )
 
-        key.name = 'f12'
-        self.assertEqual(self.get_key_display_name(key), 'F12')
+    def test_function_key_display_evdev(self):
+        self.assertEqual(
+            self.evdev_obj.get_key_display_name(_make_special_key("f6")), "F6"
+        )
+        self.assertEqual(
+            self.evdev_obj.get_key_display_name(_make_special_key("f12")), "F12"
+        )
 
-    def test_special_key_display(self):
-        """Test special key display names"""
-        key = MagicMock()
-        key.name = 'shift'
-        self.assertEqual(self.get_key_display_name(key), 'Shift')
+    def test_special_key_display_pyqt(self):
+        self.assertEqual(
+            AppWindow.get_key_display_name(_make_special_key("shift")), "Shift"
+        )
+        self.assertEqual(
+            AppWindow.get_key_display_name(_make_special_key("ctrl")), "Ctrl"
+        )
 
-        key.name = 'ctrl'
-        self.assertEqual(self.get_key_display_name(key), 'Ctrl')
+    def test_special_key_display_evdev(self):
+        self.assertEqual(
+            self.evdev_obj.get_key_display_name(_make_special_key("shift")), "Shift"
+        )
+        self.assertEqual(
+            self.evdev_obj.get_key_display_name(_make_special_key("ctrl")), "Ctrl"
+        )
 
-    def test_char_key_display(self):
-        """Test character key display names"""
-        key = MagicMock(spec=['char'])
-        key.char = 'a'
-        del key.name
-        self.assertEqual(self.get_key_display_name(key), 'A')
+    def test_char_key_display_pyqt(self):
+        self.assertEqual(AppWindow.get_key_display_name(_make_char_key("a")), "A")
+        self.assertEqual(AppWindow.get_key_display_name(_make_char_key("z")), "Z")
 
-        key.char = 'z'
-        self.assertEqual(self.get_key_display_name(key), 'Z')
+    def test_char_key_display_evdev(self):
+        self.assertEqual(self.evdev_obj.get_key_display_name(_make_char_key("a")), "A")
+        self.assertEqual(self.evdev_obj.get_key_display_name(_make_char_key("z")), "Z")
 
-    def test_fallback_display(self):
-        """Test fallback to string representation"""
-        key = MagicMock(spec=[])  # No name or char
-        del key.name
-        del key.char
-        result = self.get_key_display_name(key)
+    def test_fallback_display_pyqt(self):
+        key = object()
+        result = AppWindow.get_key_display_name(key)
+        self.assertIsInstance(result, str)
+
+    def test_fallback_display_evdev(self):
+        key = object()
+        result = self.evdev_obj.get_key_display_name(key)
         self.assertIsInstance(result, str)
 
 
-class TestConfigPersistence(unittest.TestCase):
-    """Tests for config save/load"""
-
-    def test_config_file_creation(self):
-        """Test config directory and file creation"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "autoclicker" / "config.json"
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-
-            config = {
-                'clicker1_interval': 0.1,
-                'clicker2_interval': 0.5,
-            }
-
-            with open(config_path, 'w') as f:
-                json.dump(config, f)
-
-            self.assertTrue(config_path.exists())
-
-            with open(config_path, 'r') as f:
-                loaded = json.load(f)
-
-            self.assertEqual(loaded['clicker1_interval'], 0.1)
-            self.assertEqual(loaded['clicker2_interval'], 0.5)
-
-    def test_config_invalid_json(self):
-        """Test handling of invalid JSON in config"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config.json"
-
-            with open(config_path, 'w') as f:
-                f.write("not valid json {{{")
-
-            try:
-                with open(config_path, 'r') as f:
-                    json.load(f)
-                self.fail("Should have raised JSONDecodeError")
-            except json.JSONDecodeError:
-                pass  # Expected
-
-
 class TestVersionComparison(unittest.TestCase):
-    """Tests for _version_newer method"""
-
-    def _version_newer(self, latest, current):
-        """
-        Replicate the version comparison logic for testing.
-        Handles semantic versioning with pre-release suffixes.
-        """
-        def parse_version(version_str):
-            if not version_str or not isinstance(version_str, str):
-                return (0, 0, 0, '', 0)
-
-            version_str = version_str.lstrip('v')
-
-            if '-' in version_str:
-                main_part, pre_release = version_str.split('-', 1)
-            else:
-                main_part, pre_release = version_str, ''
-
-            parts = []
-            for part in main_part.split('.'):
-                try:
-                    parts.append(int(part))
-                except ValueError:
-                    digits = ''
-                    for c in part:
-                        if c.isdigit():
-                            digits += c
-                        else:
-                            break
-                    parts.append(int(digits) if digits else 0)
-
-            while len(parts) < 3:
-                parts.append(0)
-
-            pre_release_num = 0
-            if pre_release:
-                digits = ''.join(c for c in pre_release if c.isdigit())
-                pre_release_num = int(digits) if digits else 0
-
-            return (parts[0], parts[1], parts[2], pre_release == '', pre_release_num)
-
-        try:
-            latest_parsed = parse_version(latest)
-            current_parsed = parse_version(current)
-            return latest_parsed > current_parsed
-        except Exception:
-            return False
+    """Call AppWindow._version_newer (static)."""
 
     def test_basic_comparison(self):
-        """Test basic version comparisons"""
-        self.assertTrue(self._version_newer("1.1.0", "1.0.0"))
-        self.assertTrue(self._version_newer("2.0.0", "1.9.9"))
-        self.assertTrue(self._version_newer("1.0.1", "1.0.0"))
-        self.assertFalse(self._version_newer("1.0.0", "1.0.0"))
-        self.assertFalse(self._version_newer("1.0.0", "1.0.1"))
+        self.assertTrue(AppWindow._version_newer("1.1.0", "1.0.0"))
+        self.assertTrue(AppWindow._version_newer("2.0.0", "1.9.9"))
+        self.assertTrue(AppWindow._version_newer("1.0.1", "1.0.0"))
+        self.assertFalse(AppWindow._version_newer("1.0.0", "1.0.0"))
+        self.assertFalse(AppWindow._version_newer("1.0.0", "1.0.1"))
 
     def test_pre_release_versions(self):
-        """Test pre-release version handling"""
-        # Stable > pre-release with same version
-        self.assertTrue(self._version_newer("1.4.0", "1.4.0-beta"))
-        self.assertTrue(self._version_newer("1.4.0", "1.4.0-alpha"))
-        self.assertTrue(self._version_newer("1.4.0", "1.4.0-rc1"))
-
-        # Pre-release < stable
-        self.assertFalse(self._version_newer("1.4.0-beta", "1.4.0"))
-
-        # Beta2 > beta1
-        self.assertTrue(self._version_newer("1.4.0-beta2", "1.4.0-beta1"))
+        self.assertTrue(AppWindow._version_newer("1.4.0", "1.4.0-beta"))
+        self.assertTrue(AppWindow._version_newer("1.4.0", "1.4.0-alpha"))
+        self.assertTrue(AppWindow._version_newer("1.4.0", "1.4.0-rc1"))
+        self.assertFalse(AppWindow._version_newer("1.4.0-beta", "1.4.0"))
+        self.assertTrue(AppWindow._version_newer("1.4.0-beta2", "1.4.0-beta1"))
 
     def test_v_prefix(self):
-        """Test version strings with 'v' prefix"""
-        self.assertTrue(self._version_newer("v1.1.0", "v1.0.0"))
-        self.assertTrue(self._version_newer("v1.1.0", "1.0.0"))
-        self.assertTrue(self._version_newer("1.1.0", "v1.0.0"))
+        self.assertTrue(AppWindow._version_newer("v1.1.0", "v1.0.0"))
+        self.assertTrue(AppWindow._version_newer("v1.1.0", "1.0.0"))
+        self.assertTrue(AppWindow._version_newer("1.1.0", "v1.0.0"))
 
     def test_two_part_versions(self):
-        """Test two-part version strings"""
-        self.assertTrue(self._version_newer("1.1", "1.0"))
-        # "1.1.0" and "1.1" are equivalent (both parse to 1.1.0)
-        self.assertFalse(self._version_newer("1.1.0", "1.1"))
-        self.assertFalse(self._version_newer("1.0", "1.0.0"))
+        self.assertTrue(AppWindow._version_newer("1.1", "1.0"))
+        self.assertFalse(AppWindow._version_newer("1.1.0", "1.1"))
+        self.assertFalse(AppWindow._version_newer("1.0", "1.0.0"))
 
     def test_invalid_versions(self):
-        """Test handling of invalid version strings"""
-        # Invalid latest version should not be considered newer
-        self.assertFalse(self._version_newer(None, "1.0.0"))
-        self.assertFalse(self._version_newer("", "1.0.0"))
-        self.assertFalse(self._version_newer("invalid", "1.0.0"))
-        # Any valid version IS newer than invalid/None current
-        self.assertTrue(self._version_newer("1.0.0", None))
-        self.assertTrue(self._version_newer("1.0.0", ""))
+        self.assertFalse(AppWindow._version_newer(None, "1.0.0"))
+        self.assertFalse(AppWindow._version_newer("", "1.0.0"))
+        self.assertFalse(AppWindow._version_newer("invalid", "1.0.0"))
+        self.assertTrue(AppWindow._version_newer("1.0.0", None))
+        self.assertTrue(AppWindow._version_newer("1.0.0", ""))
 
     def test_edge_cases(self):
-        """Test edge cases"""
-        # Large version numbers
-        self.assertTrue(self._version_newer("100.0.0", "99.99.99"))
+        self.assertTrue(AppWindow._version_newer("100.0.0", "99.99.99"))
+        self.assertTrue(AppWindow._version_newer("0.0.1", "0.0.0"))
+        self.assertFalse(AppWindow._version_newer("1.0.0-beta", "1.0.0-beta"))
 
-        # Zero versions
-        self.assertTrue(self._version_newer("0.0.1", "0.0.0"))
 
-        # Same pre-release
-        self.assertFalse(self._version_newer("1.0.0-beta", "1.0.0-beta"))
+class TestComputeGitBlobSha(unittest.TestCase):
+    """Call AppWindow._compute_git_blob_sha with known data."""
+
+    def setUp(self):
+        self.obj = object.__new__(AppWindow)
+
+    def test_known_blob_sha(self):
+        # "git hash-object" for "hello\n" = ce013625030ba8dba906f756967f9e9ca394464a
+        content = b"hello\n"
+        expected = hashlib.sha1(b"blob 6\0hello\n").hexdigest()
+        result = self.obj._compute_git_blob_sha(content)
+        self.assertEqual(result, expected)
+        self.assertEqual(result, "ce013625030ba8dba906f756967f9e9ca394464a")
+
+    def test_empty_content(self):
+        content = b""
+        expected = hashlib.sha1(b"blob 0\0").hexdigest()
+        result = self.obj._compute_git_blob_sha(content)
+        self.assertEqual(result, expected)
+
+    def test_binary_content(self):
+        content = b"\x00\x01\x02\xff"
+        expected = hashlib.sha1(b"blob 4\0\x00\x01\x02\xff").hexdigest()
+        result = self.obj._compute_git_blob_sha(content)
+        self.assertEqual(result, expected)
+
+
+class TestConfigPersistence(unittest.TestCase):
+    """Patch config_path, then call save_config / load_config on evdev."""
+
+    def _make_configured_obj(self, config_path: Path) -> DualAutoClicker:
+        """Build a minimally-initialized DualAutoClicker for config tests."""
+        obj = _make_evdev_obj()
+        obj.config_path = config_path
+
+        # Set all state attrs that save_config / load_config touch
+        obj.clicker1_interval = 0.15
+        obj.clicker2_interval = 0.55
+        obj.keypresser_interval = 0.25
+        obj.clicker1_hotkey = mock_key.f6
+        obj.clicker1_hotkey_display = "F6"
+        obj.clicker2_hotkey = mock_key.f7
+        obj.clicker2_hotkey_display = "F7"
+        obj.keypresser_hotkey = mock_key.f8
+        obj.keypresser_hotkey_display = "F8"
+        obj.keypresser_target_key = 57  # KEY_SPACE
+        obj.keypresser_target_key_display = "Space"
+        obj.emergency_stop_hotkey = mock_key.f9
+        obj.emergency_stop_hotkey_display = "F9"
+        return obj
+
+    def test_save_creates_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "autoclicker" / "config.json"
+            obj = self._make_configured_obj(cfg)
+            obj.save_config()
+            self.assertTrue(cfg.exists())
+
+    def test_roundtrip_intervals(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "autoclicker" / "config.json"
+            obj = self._make_configured_obj(cfg)
+            obj.save_config()
+
+            # Create a fresh object and load
+            obj2 = self._make_configured_obj(cfg)
+            obj2.clicker1_interval = DEFAULT_CLICKER1_INTERVAL
+            obj2.clicker2_interval = DEFAULT_CLICKER2_INTERVAL
+            obj2.keypresser_interval = DEFAULT_KEYPRESSER_INTERVAL
+            obj2.load_config()
+
+            self.assertAlmostEqual(obj2.clicker1_interval, 0.15)
+            self.assertAlmostEqual(obj2.clicker2_interval, 0.55)
+            self.assertAlmostEqual(obj2.keypresser_interval, 0.25)
+
+    def test_load_missing_file_keeps_defaults(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "nonexistent" / "config.json"
+            obj = self._make_configured_obj(cfg)
+            obj.clicker1_interval = DEFAULT_CLICKER1_INTERVAL
+            obj.load_config()  # should not crash
+            self.assertEqual(obj.clicker1_interval, DEFAULT_CLICKER1_INTERVAL)
+
+    def test_load_corrupt_json_keeps_defaults(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "config.json"
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            cfg.write_text("not valid json {{{")
+            obj = self._make_configured_obj(cfg)
+            obj.clicker1_interval = DEFAULT_CLICKER1_INTERVAL
+            obj.load_config()  # should not crash
+            self.assertEqual(obj.clicker1_interval, DEFAULT_CLICKER1_INTERVAL)
+
+    def test_save_merges_with_existing(self):
+        """save_config should preserve keys from the other backend."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "autoclicker" / "config.json"
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            # Pre-existing config from the PyQt6 side
+            cfg.write_text(json.dumps({"dark_mode": True, "extra_key": 42}))
+
+            obj = self._make_configured_obj(cfg)
+            obj.save_config()
+
+            data = json.loads(cfg.read_text())
+            # Our values written
+            self.assertAlmostEqual(data["clicker1_interval"], 0.15)
+            # Pre-existing keys preserved
+            self.assertTrue(data.get("dark_mode"))
+            self.assertEqual(data.get("extra_key"), 42)
+
+
+class TestHotkeyRateLimiting(unittest.TestCase):
+    """Call DualAutoClicker.on_hotkey_press and verify rate limiting."""
+
+    def _make_hotkey_obj(self):
+        obj = _make_evdev_obj()
+        obj.last_hotkey_time = {}
+        obj.hotkey_timing_lock = threading.Lock()
+        obj.hotkey_cooldown = 0.2
+        obj.clicker1_hotkey = mock_key.f6
+        obj.clicker2_hotkey = mock_key.f7
+        obj.keypresser_hotkey = mock_key.f8
+        obj.emergency_stop_hotkey = mock_key.f9
+        # Patch toggle methods so we can count calls
+        obj.toggle_clicker1 = MagicMock()
+        obj.toggle_clicker2 = MagicMock()
+        obj.toggle_keypresser = MagicMock()
+        obj.emergency_stop_all = MagicMock()
+        return obj
+
+    def test_first_press_accepted(self):
+        obj = self._make_hotkey_obj()
+        obj.on_hotkey_press(mock_key.f6)
+        obj.toggle_clicker1.assert_called_once()
+
+    def test_rapid_press_rejected(self):
+        obj = self._make_hotkey_obj()
+        obj.on_hotkey_press(mock_key.f6)
+        obj.on_hotkey_press(mock_key.f6)  # too fast
+        self.assertEqual(obj.toggle_clicker1.call_count, 1)
+
+    def test_press_after_cooldown_accepted(self):
+        obj = self._make_hotkey_obj()
+        obj.on_hotkey_press(mock_key.f6)
+        # Manipulate the stored time to simulate cooldown expiring
+        key_str = str(mock_key.f6)
+        with obj.hotkey_timing_lock:
+            obj.last_hotkey_time[key_str] -= 0.3
+        obj.on_hotkey_press(mock_key.f6)
+        self.assertEqual(obj.toggle_clicker1.call_count, 2)
+
+    def test_different_keys_independent(self):
+        obj = self._make_hotkey_obj()
+        obj.on_hotkey_press(mock_key.f6)
+        obj.on_hotkey_press(mock_key.f7)
+        obj.toggle_clicker1.assert_called_once()
+        obj.toggle_clicker2.assert_called_once()
+
+    def test_emergency_stop_has_priority(self):
+        obj = self._make_hotkey_obj()
+        obj.on_hotkey_press(mock_key.f9)
+        obj.emergency_stop_all.assert_called_once()
+
+    def test_keypresser_hotkey(self):
+        obj = self._make_hotkey_obj()
+        obj.on_hotkey_press(mock_key.f8)
+        obj.toggle_keypresser.assert_called_once()
 
 
 class TestConstants(unittest.TestCase):
-    """Tests for module constants"""
+    """Test module constants from autoclicker_evdev."""
 
     def test_interval_bounds(self):
-        """Test interval bounds are sensible"""
-        from autoclicker_evdev import MIN_INTERVAL, MAX_INTERVAL
         self.assertGreater(MIN_INTERVAL, 0)
         self.assertLess(MIN_INTERVAL, 1)
         self.assertGreater(MAX_INTERVAL, MIN_INTERVAL)
-        self.assertLessEqual(MAX_INTERVAL, 3600)  # Not more than 1 hour
+        self.assertLessEqual(MAX_INTERVAL, 3600)
 
     def test_default_intervals(self):
-        """Test default intervals are within bounds"""
-        from autoclicker_evdev import (
-            MIN_INTERVAL, MAX_INTERVAL,
-            DEFAULT_CLICKER1_INTERVAL,
-            DEFAULT_CLICKER2_INTERVAL,
-            DEFAULT_KEYPRESSER_INTERVAL
-        )
         self.assertGreaterEqual(DEFAULT_CLICKER1_INTERVAL, MIN_INTERVAL)
         self.assertLessEqual(DEFAULT_CLICKER1_INTERVAL, MAX_INTERVAL)
         self.assertGreaterEqual(DEFAULT_CLICKER2_INTERVAL, MIN_INTERVAL)
@@ -547,5 +691,136 @@ class TestConstants(unittest.TestCase):
         self.assertLessEqual(DEFAULT_KEYPRESSER_INTERVAL, MAX_INTERVAL)
 
 
-if __name__ == '__main__':
+class TestThreadSafety(unittest.TestCase):
+    """Tests for toggle mutual exclusion and emergency stop using evdev backend."""
+
+    def _make_clicker(self):
+        """Create a minimally-initialized DualAutoClicker for toggle tests."""
+        obj = object.__new__(DualAutoClicker)
+        obj.clicker1_lock = threading.Lock()
+        obj.clicker2_lock = threading.Lock()
+        obj.keypresser_lock = threading.Lock()
+        obj.clicker1_clicking = False
+        obj.clicker2_clicking = False
+        obj.keypresser_pressing = False
+        obj.clicker1_interval = 0.1
+        obj.clicker2_interval = 0.5
+        obj.keypresser_interval = 0.1
+        obj.clicker1_thread = None
+        obj.clicker2_thread = None
+        obj.keypresser_thread = None
+        obj.keypresser_target_key = 57  # KEY_SPACE
+        obj.virtual_mouse = None
+        obj.virtual_keyboard = None
+        # Mock UI elements
+        obj.status1_var = MagicMock()
+        obj.status1_label = MagicMock()
+        obj.status2_var = MagicMock()
+        obj.status2_label = MagicMock()
+        obj.keypresser_status_var = MagicMock()
+        obj.keypresser_status_label = MagicMock()
+        obj.window = MagicMock()
+        return obj
+
+    def test_start_clicker1_sets_flag(self):
+        obj = self._make_clicker()
+        # Mock perform_click to be a no-op so the thread doesn't actually click
+        obj.perform_click = MagicMock()
+        obj.start_clicker1()
+        self.assertTrue(obj.clicker1_clicking)
+        self.assertIsNotNone(obj.clicker1_thread)
+        # Clean up
+        obj.stop_clicker1()
+        time.sleep(0.05)
+
+    def test_stop_clicker1_clears_flag(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.start_clicker1()
+        obj.stop_clicker1()
+        self.assertFalse(obj.clicker1_clicking)
+
+    def test_toggle_clicker1_starts_when_idle(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.toggle_clicker1()
+        self.assertTrue(obj.clicker1_clicking)
+        obj.stop_clicker1()
+        time.sleep(0.05)
+
+    def test_toggle_clicker1_stops_when_active(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.start_clicker1()
+        obj.toggle_clicker1()
+        self.assertFalse(obj.clicker1_clicking)
+
+    def test_mutual_exclusion_clicker1_stops_clicker2(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.start_clicker2()
+        self.assertTrue(obj.clicker2_clicking)
+        obj.toggle_clicker1()
+        self.assertTrue(obj.clicker1_clicking)
+        self.assertFalse(obj.clicker2_clicking)
+        obj.stop_clicker1()
+        time.sleep(0.05)
+
+    def test_mutual_exclusion_clicker2_stops_clicker1(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.start_clicker1()
+        self.assertTrue(obj.clicker1_clicking)
+        obj.toggle_clicker2()
+        self.assertTrue(obj.clicker2_clicking)
+        self.assertFalse(obj.clicker1_clicking)
+        obj.stop_clicker2()
+        time.sleep(0.05)
+
+    def test_emergency_stop_all(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.perform_keypress = MagicMock()
+        obj.start_clicker1()
+        obj.start_keypresser()
+        self.assertTrue(obj.clicker1_clicking)
+        self.assertTrue(obj.keypresser_pressing)
+        obj.emergency_stop_all()
+        self.assertFalse(obj.clicker1_clicking)
+        self.assertFalse(obj.clicker2_clicking)
+        self.assertFalse(obj.keypresser_pressing)
+        time.sleep(0.05)
+
+    def test_keypresser_independent_of_clickers(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.perform_keypress = MagicMock()
+        obj.start_clicker1()
+        obj.start_keypresser()
+        self.assertTrue(obj.clicker1_clicking)
+        self.assertTrue(obj.keypresser_pressing)
+        obj.stop_clicker1()
+        self.assertFalse(obj.clicker1_clicking)
+        self.assertTrue(obj.keypresser_pressing)
+        obj.stop_keypresser()
+        time.sleep(0.05)
+
+
+class TestVersionNewerPyQt(unittest.TestCase):
+    """Additional _version_newer tests calling production code from AppWindow."""
+
+    def test_tag_format_validation(self):
+        """Verify the tag regex used in _apply_update."""
+        import re
+
+        pattern = r"^v?\d+\.\d+(\.\d+)?(-[\w.]+)?$"
+        self.assertIsNotNone(re.match(pattern, "v1.11"))
+        self.assertIsNotNone(re.match(pattern, "1.11.0"))
+        self.assertIsNotNone(re.match(pattern, "v2.0.0-beta1"))
+        self.assertIsNone(re.match(pattern, "../../../evil"))
+        self.assertIsNone(re.match(pattern, "main"))
+        self.assertIsNone(re.match(pattern, ""))
+
+
+if __name__ == "__main__":
     unittest.main()

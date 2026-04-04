@@ -1,7 +1,7 @@
 # AutoClicker
 
 Python/PyQt6 automated mouse clicker and keyboard presser with dual clicker support. Two backends: pynput (cross-platform, PyQt6 GUI) and evdev (Linux Wayland/games, tkinter GUI). Stack: Python, PyQt6, pynput.
-v1.11
+v1.12
 
 Docs: .claude/index.md
 
