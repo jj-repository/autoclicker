@@ -10,7 +10,7 @@ permissions: {}
 
 jobs:
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -41,7 +41,7 @@ jobs:
           dist/Autoclicker-Linux
 
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     permissions:
       contents: read
     steps:
@@ -73,10 +73,12 @@ jobs:
 
   release:
     needs: [build-linux, build-windows]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
+      id-token: write
+      attestations: write
 
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -93,32 +95,39 @@ jobs:
         name: windows-executables
         path: dist/windows
 
-    - name: Create Release
-      uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
+    - name: Attest build provenance
+      uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v2
       with:
-        files: |
+        subject-path: |
           dist/linux/Autoclicker-Linux
           dist/windows/Autoclicker.exe
-        body: |
-          ## Downloads
 
-          | File | Platform |
-          |------|----------|
-          | **Autoclicker.exe** | Windows |
-          | **Autoclicker-Linux** | Linux (requires sudo) |
+    - name: Create Release
+      run: |
+        gh release create "${{ github.ref_name }}" \
+          dist/linux/Autoclicker-Linux \
+          dist/windows/Autoclicker.exe \
+          --title "${{ github.ref_name }}" \
+          --generate-notes \
+          --notes "$(cat <<'NOTES'
+        ## Downloads
 
-          ## Installation
+        | File | Platform |
+        |------|----------|
+        | **Autoclicker.exe** | Windows |
+        | **Autoclicker-Linux** | Linux (requires sudo) |
 
-          ### Windows
-          1. Download `Autoclicker.exe`
-          2. Run it (may need Administrator privileges)
+        ## Installation
 
-          ### Linux
-          1. Download `Autoclicker-Linux`
-          2. Make it executable: `chmod +x Autoclicker-Linux`
-          3. Run with sudo: `sudo ./Autoclicker-Linux`
+        ### Windows
+        1. Download `Autoclicker.exe`
+        2. Run it (may need Administrator privileges)
 
-          ---
-          Built automatically with GitHub Actions
+        ### Linux
+        1. Download `Autoclicker-Linux`
+        2. Make it executable: `chmod +x Autoclicker-Linux`
+        3. Run with sudo: `sudo ./Autoclicker-Linux`
+        NOTES
+        )"
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
