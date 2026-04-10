@@ -709,6 +709,12 @@ class TestThreadSafety(unittest.TestCase):
         obj.clicker1_thread = None
         obj.clicker2_thread = None
         obj.keypresser_thread = None
+        obj.clicker1_stop = threading.Event()
+        obj.clicker1_stop.set()
+        obj.clicker2_stop = threading.Event()
+        obj.clicker2_stop.set()
+        obj.keypresser_stop = threading.Event()
+        obj.keypresser_stop.set()
         obj.keypresser_target_key = 57  # KEY_SPACE
         obj.virtual_mouse = None
         obj.virtual_keyboard = None
@@ -731,7 +737,8 @@ class TestThreadSafety(unittest.TestCase):
         self.assertIsNotNone(obj.clicker1_thread)
         # Clean up
         obj.stop_clicker1()
-        time.sleep(0.05)
+        if obj.clicker1_thread:
+            obj.clicker1_thread.join(timeout=2)
 
     def test_stop_clicker1_clears_flag(self):
         obj = self._make_clicker()
@@ -746,7 +753,13 @@ class TestThreadSafety(unittest.TestCase):
         obj.toggle_clicker1()
         self.assertTrue(obj.clicker1_clicking)
         obj.stop_clicker1()
-        time.sleep(0.05)
+        for t in [
+            obj.clicker1_thread,
+            obj.clicker2_thread,
+            getattr(obj, "keypresser_thread", None),
+        ]:
+            if t and t.is_alive():
+                t.join(timeout=2)
 
     def test_toggle_clicker1_stops_when_active(self):
         obj = self._make_clicker()
@@ -764,7 +777,13 @@ class TestThreadSafety(unittest.TestCase):
         self.assertTrue(obj.clicker1_clicking)
         self.assertFalse(obj.clicker2_clicking)
         obj.stop_clicker1()
-        time.sleep(0.05)
+        for t in [
+            obj.clicker1_thread,
+            obj.clicker2_thread,
+            getattr(obj, "keypresser_thread", None),
+        ]:
+            if t and t.is_alive():
+                t.join(timeout=2)
 
     def test_mutual_exclusion_clicker2_stops_clicker1(self):
         obj = self._make_clicker()
@@ -775,7 +794,13 @@ class TestThreadSafety(unittest.TestCase):
         self.assertTrue(obj.clicker2_clicking)
         self.assertFalse(obj.clicker1_clicking)
         obj.stop_clicker2()
-        time.sleep(0.05)
+        for t in [
+            obj.clicker1_thread,
+            obj.clicker2_thread,
+            getattr(obj, "keypresser_thread", None),
+        ]:
+            if t and t.is_alive():
+                t.join(timeout=2)
 
     def test_emergency_stop_all(self):
         obj = self._make_clicker()
@@ -789,7 +814,13 @@ class TestThreadSafety(unittest.TestCase):
         self.assertFalse(obj.clicker1_clicking)
         self.assertFalse(obj.clicker2_clicking)
         self.assertFalse(obj.keypresser_pressing)
-        time.sleep(0.05)
+        for t in [
+            obj.clicker1_thread,
+            obj.clicker2_thread,
+            getattr(obj, "keypresser_thread", None),
+        ]:
+            if t and t.is_alive():
+                t.join(timeout=2)
 
     def test_keypresser_independent_of_clickers(self):
         obj = self._make_clicker()
@@ -803,7 +834,13 @@ class TestThreadSafety(unittest.TestCase):
         self.assertFalse(obj.clicker1_clicking)
         self.assertTrue(obj.keypresser_pressing)
         obj.stop_keypresser()
-        time.sleep(0.05)
+        for t in [
+            obj.clicker1_thread,
+            obj.clicker2_thread,
+            getattr(obj, "keypresser_thread", None),
+        ]:
+            if t and t.is_alive():
+                t.join(timeout=2)
 
 
 class TestVersionNewerPyQt(unittest.TestCase):
@@ -820,6 +857,948 @@ class TestVersionNewerPyQt(unittest.TestCase):
         self.assertIsNone(re.match(pattern, "../../../evil"))
         self.assertIsNone(re.match(pattern, "main"))
         self.assertIsNone(re.match(pattern, ""))
+
+
+# ═════════════════════════════════════════════════════════════════════
+#  New tests added by audit
+# ═════════════════════════════════════════════════════════════════════
+
+
+class TestVerifyFileIntegrity(unittest.TestCase):
+    """Test _compute_git_blob_sha and _verify_file_against_github."""
+
+    def setUp(self):
+        self.obj = object.__new__(AppWindow)
+
+    def test_verify_matching_sha_passes(self):
+        content = b"hello world\n"
+        expected_sha = self.obj._compute_git_blob_sha(content)
+        # Mock urlopen to return the expected SHA
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_response.read.return_value = json.dumps({"sha": expected_sha}).encode()
+
+        import urllib.request
+
+        with unittest.mock.patch.object(
+            urllib.request, "urlopen", return_value=mock_response
+        ):
+            # Should not raise
+            self.obj._verify_file_against_github(
+                "v1.0", "test.py", content, {"User-Agent": "test"}
+            )
+
+    def test_verify_mismatching_sha_raises(self):
+        content = b"hello world\n"
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_response.read.return_value = json.dumps({"sha": "0000bad"}).encode()
+
+        import urllib.request
+
+        with unittest.mock.patch.object(
+            urllib.request, "urlopen", return_value=mock_response
+        ):
+            with self.assertRaises(RuntimeError):
+                self.obj._verify_file_against_github(
+                    "v1.0", "test.py", content, {"User-Agent": "test"}
+                )
+
+    def test_verify_empty_sha_raises(self):
+        content = b"data"
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_response.read.return_value = json.dumps({"sha": ""}).encode()
+
+        import urllib.request
+
+        with unittest.mock.patch.object(
+            urllib.request, "urlopen", return_value=mock_response
+        ):
+            with self.assertRaises(RuntimeError):
+                self.obj._verify_file_against_github(
+                    "v1.0", "test.py", content, {"User-Agent": "test"}
+                )
+
+
+class TestConfigPersistencePyQt(unittest.TestCase):
+    """Test PyQt6 AppWindow _save_config / _load_config."""
+
+    def _make_pyqt_obj(self, config_path: Path):
+        obj = object.__new__(AppWindow)
+        # Minimal state for config save/load
+        obj.clicker1_interval = 0.2
+        obj.clicker2_interval = 0.6
+        obj.clicker1_hotkey = mock_key.f6
+        obj.clicker1_hotkey_display = "F6"
+        obj.clicker2_hotkey = mock_key.f7
+        obj.clicker2_hotkey_display = "F7"
+        obj.keypresser_interval = 0.3
+        obj.keypresser_hotkey = mock_key.f8
+        obj.keypresser_hotkey_display = "F8"
+        obj.keypresser_target_key = mock_key.space
+        obj.keypresser_target_key_display = "Space"
+        obj.emergency_stop_hotkey = mock_key.f9
+        obj.emergency_stop_hotkey_display = "F9"
+        obj.auto_check_updates = False
+        # Mock geometry
+        geo = MagicMock()
+        geo.width.return_value = 600
+        geo.height.return_value = 800
+        geo.x.return_value = 100
+        geo.y.return_value = 50
+        obj.geometry = MagicMock(return_value=geo)
+        # Patch _config_path
+        type(obj)._config_path = property(lambda self: config_path)
+        return obj
+
+    def test_save_creates_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "autoclicker" / "config.json"
+            obj = self._make_pyqt_obj(cfg)
+            obj._save_config()
+            self.assertTrue(cfg.exists())
+
+    def test_roundtrip_intervals(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "autoclicker" / "config.json"
+            obj = self._make_pyqt_obj(cfg)
+            obj._save_config()
+
+            obj2 = self._make_pyqt_obj(cfg)
+            obj2.clicker1_interval = 0.1
+            obj2.clicker2_interval = 0.5
+            obj2.keypresser_interval = 0.1
+            obj2.auto_check_updates = True
+            # Mock resize/move for geometry loading
+            obj2.resize = MagicMock()
+            obj2.move = MagicMock()
+            obj2._load_config()
+
+            self.assertAlmostEqual(obj2.clicker1_interval, 0.2)
+            self.assertAlmostEqual(obj2.clicker2_interval, 0.6)
+            self.assertAlmostEqual(obj2.keypresser_interval, 0.3)
+            self.assertFalse(obj2.auto_check_updates)
+
+    def test_roundtrip_hotkeys(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "autoclicker" / "config.json"
+            obj = self._make_pyqt_obj(cfg)
+            obj._save_config()
+
+            obj2 = self._make_pyqt_obj(cfg)
+            obj2.resize = MagicMock()
+            obj2.move = MagicMock()
+            obj2._load_config()
+
+            self.assertEqual(obj2.clicker1_hotkey_display, "F6")
+            self.assertEqual(obj2.clicker2_hotkey_display, "F7")
+            self.assertEqual(obj2.emergency_stop_hotkey_display, "F9")
+
+    def test_load_missing_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "nope" / "config.json"
+            obj = self._make_pyqt_obj(cfg)
+            obj._load_config()  # should not crash
+            self.assertAlmostEqual(obj.clicker1_interval, 0.2)
+
+    def test_load_corrupt_json(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "config.json"
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            cfg.write_text("{{{not json")
+            obj = self._make_pyqt_obj(cfg)
+            obj._load_config()  # should not crash
+
+    def test_geometry_string_format(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "config.json"
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            cfg.write_text(json.dumps({"window_geometry": "800x600+100+200"}))
+            obj = self._make_pyqt_obj(cfg)
+            obj.resize = MagicMock()
+            obj.move = MagicMock()
+            obj._load_config()
+            obj.resize.assert_called_with(800, 600)
+            obj.move.assert_called_with(100, 200)
+
+    def test_geometry_dict_format(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "config.json"
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            cfg.write_text(
+                json.dumps({"window_geometry": {"w": 700, "h": 500, "x": 50, "y": 25}})
+            )
+            obj = self._make_pyqt_obj(cfg)
+            obj.resize = MagicMock()
+            obj.move = MagicMock()
+            obj._load_config()
+            obj.resize.assert_called_with(700, 500)
+            obj.move.assert_called_with(50, 25)
+
+
+class TestHotkeyRateLimitingPyQt(unittest.TestCase):
+    """Test AppWindow.on_hotkey_press rate limiting and dispatch."""
+
+    def _make_hotkey_obj(self):
+        obj = object.__new__(AppWindow)
+        obj.last_hotkey_time = {}
+        obj.hotkey_timing_lock = threading.Lock()
+        obj.hotkey_cooldown = 0.2
+        obj.clicker1_hotkey = mock_key.f6
+        obj.clicker2_hotkey = mock_key.f7
+        obj.keypresser_hotkey = mock_key.f8
+        obj.emergency_stop_hotkey = mock_key.f9
+        obj.toggle_clicker1 = MagicMock()
+        obj.toggle_clicker2 = MagicMock()
+        obj.toggle_keypresser = MagicMock()
+        obj.emergency_stop_all = MagicMock()
+        return obj
+
+    def test_first_press_accepted(self):
+        obj = self._make_hotkey_obj()
+        obj.on_hotkey_press(mock_key.f6)
+        obj.toggle_clicker1.assert_called_once()
+
+    def test_rapid_press_rejected(self):
+        obj = self._make_hotkey_obj()
+        obj.on_hotkey_press(mock_key.f6)
+        obj.on_hotkey_press(mock_key.f6)
+        self.assertEqual(obj.toggle_clicker1.call_count, 1)
+
+    def test_emergency_stop(self):
+        obj = self._make_hotkey_obj()
+        obj.on_hotkey_press(mock_key.f9)
+        obj.emergency_stop_all.assert_called_once()
+
+    def test_all_hotkeys_dispatch(self):
+        obj = self._make_hotkey_obj()
+        obj.on_hotkey_press(mock_key.f6)
+        obj.on_hotkey_press(mock_key.f7)
+        obj.on_hotkey_press(mock_key.f8)
+        obj.toggle_clicker1.assert_called_once()
+        obj.toggle_clicker2.assert_called_once()
+        obj.toggle_keypresser.assert_called_once()
+
+
+class TestThreadSafetyPyQt(unittest.TestCase):
+    """Test toggle/start/stop/mutual-exclusion for PyQt6 AppWindow."""
+
+    def _make_clicker(self):
+        obj = object.__new__(AppWindow)
+        obj.clicker1_lock = threading.Lock()
+        obj.clicker2_lock = threading.Lock()
+        obj.keypresser_lock = threading.Lock()
+        obj.clicker1_clicking = False
+        obj.clicker2_clicking = False
+        obj.keypresser_pressing = False
+        obj.clicker1_interval = 0.1
+        obj.clicker2_interval = 0.5
+        obj.keypresser_interval = 0.1
+        obj.clicker1_thread = None
+        obj.clicker2_thread = None
+        obj.keypresser_thread = None
+        obj.clicker1_stop = threading.Event()
+        obj.clicker1_stop.set()
+        obj.clicker2_stop = threading.Event()
+        obj.clicker2_stop.set()
+        obj.keypresser_stop = threading.Event()
+        obj.keypresser_stop.set()
+        obj.keypresser_target_key = mock_key.space
+        obj.mouse_controller = MagicMock()
+        obj.keyboard_controller = MagicMock()
+        # Mock UI
+        obj._status1_label = MagicMock()
+        obj._status2_label = MagicMock()
+        obj._kp_status_label = MagicMock()
+        obj._ui_updater = MagicMock()
+        obj._ui_updater.requested = MagicMock()
+        return obj
+
+    def test_start_clicker1(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.start_clicker1()
+        self.assertTrue(obj.clicker1_clicking)
+        obj.stop_clicker1()
+        if obj.clicker1_thread:
+            obj.clicker1_thread.join(timeout=1)
+
+    def test_stop_clicker1(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.start_clicker1()
+        obj.stop_clicker1()
+        self.assertFalse(obj.clicker1_clicking)
+        if obj.clicker1_thread:
+            obj.clicker1_thread.join(timeout=1)
+
+    def test_toggle_starts_when_idle(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.toggle_clicker1()
+        self.assertTrue(obj.clicker1_clicking)
+        obj.stop_clicker1()
+        if obj.clicker1_thread:
+            obj.clicker1_thread.join(timeout=1)
+
+    def test_toggle_stops_when_active(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.start_clicker1()
+        obj.toggle_clicker1()
+        self.assertFalse(obj.clicker1_clicking)
+        if obj.clicker1_thread:
+            obj.clicker1_thread.join(timeout=1)
+
+    def test_mutual_exclusion(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.start_clicker2()
+        self.assertTrue(obj.clicker2_clicking)
+        obj.toggle_clicker1()
+        self.assertTrue(obj.clicker1_clicking)
+        self.assertFalse(obj.clicker2_clicking)
+        obj.stop_clicker1()
+        if obj.clicker1_thread:
+            obj.clicker1_thread.join(timeout=1)
+        if obj.clicker2_thread:
+            obj.clicker2_thread.join(timeout=1)
+
+    def test_emergency_stop_all(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.perform_keypress = MagicMock()
+        obj.start_clicker1()
+        obj.start_keypresser()
+        obj.emergency_stop_all()
+        self.assertFalse(obj.clicker1_clicking)
+        self.assertFalse(obj.clicker2_clicking)
+        self.assertFalse(obj.keypresser_pressing)
+        for t in [obj.clicker1_thread, obj.keypresser_thread]:
+            if t:
+                t.join(timeout=1)
+
+    def test_keypresser_independent(self):
+        obj = self._make_clicker()
+        obj.perform_click = MagicMock()
+        obj.perform_keypress = MagicMock()
+        obj.start_clicker1()
+        obj.start_keypresser()
+        self.assertTrue(obj.clicker1_clicking)
+        self.assertTrue(obj.keypresser_pressing)
+        obj.stop_clicker1()
+        self.assertTrue(obj.keypresser_pressing)
+        obj.stop_keypresser()
+        for t in [obj.clicker1_thread, obj.keypresser_thread]:
+            if t:
+                t.join(timeout=1)
+
+
+class TestActionLoopError(unittest.TestCase):
+    """Test that action_loop from core handles errors gracefully."""
+
+    def test_action_loop_error_calls_on_error(self):
+        from autoclicker_core import action_loop as _action_loop
+
+        stop = threading.Event()
+        error_caught = {}
+
+        def on_error(e):
+            error_caught["exc"] = e
+            stop.set()
+
+        action = MagicMock(side_effect=RuntimeError("no uinput"))
+        _action_loop(stop, lambda: 0.01, action, on_error)
+        self.assertIn("exc", error_caught)
+        self.assertIsInstance(error_caught["exc"], RuntimeError)
+
+    def test_action_loop_stops_on_event(self):
+        from autoclicker_core import action_loop as _action_loop
+
+        stop = threading.Event()
+        call_count = {"n": 0}
+
+        def action():
+            call_count["n"] += 1
+            if call_count["n"] >= 3:
+                stop.set()
+
+        _action_loop(stop, lambda: 0.001, action, lambda e: None)
+        self.assertGreaterEqual(call_count["n"], 3)
+
+
+class TestConfigRoundtripHotkeysEvdev(unittest.TestCase):
+    """Test that evdev config round-trips hotkey values (not just intervals)."""
+
+    def _make_configured_obj(self, config_path: Path) -> DualAutoClicker:
+        obj = _make_evdev_obj()
+        obj.config_path = config_path
+        obj.clicker1_interval = 0.15
+        obj.clicker2_interval = 0.55
+        obj.keypresser_interval = 0.25
+        obj.clicker1_hotkey = mock_key.f6
+        obj.clicker1_hotkey_display = "F6"
+        obj.clicker2_hotkey = mock_key.f7
+        obj.clicker2_hotkey_display = "F7"
+        obj.keypresser_hotkey = mock_key.f8
+        obj.keypresser_hotkey_display = "F8"
+        obj.keypresser_target_key = 57
+        obj.keypresser_target_key_display = "Space"
+        obj.emergency_stop_hotkey = mock_key.f9
+        obj.emergency_stop_hotkey_display = "F9"
+        return obj
+
+    def test_roundtrip_hotkey_displays(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "autoclicker" / "config.json"
+            obj = self._make_configured_obj(cfg)
+            obj.save_config()
+
+            obj2 = self._make_configured_obj(cfg)
+            obj2.clicker1_hotkey_display = "?"
+            obj2.emergency_stop_hotkey_display = "?"
+            obj2.load_config()
+
+            self.assertEqual(obj2.clicker1_hotkey_display, "F6")
+            self.assertEqual(obj2.emergency_stop_hotkey_display, "F9")
+
+    def test_invalid_target_key_uses_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "config.json"
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            cfg.write_text(json.dumps({"keypresser_target_key": 999}))
+            obj = self._make_configured_obj(cfg)
+            obj.keypresser_target_key = 57  # default
+            obj.load_config()
+            self.assertEqual(obj.keypresser_target_key, 57)  # stayed default
+
+
+class TestAutoclickerCore(unittest.TestCase):
+    """Test autoclicker_core functions directly (not through backend wrappers)."""
+
+    def test_validate_interval_direct(self):
+        from autoclicker_core import validate_interval, MIN_INTERVAL, MAX_INTERVAL
+
+        self.assertEqual(validate_interval(0.5, 0.1), 0.5)
+        self.assertEqual(validate_interval(None, 0.1), 0.1)
+        self.assertEqual(validate_interval(-1, 0.1), 0.1)
+        self.assertEqual(validate_interval(MIN_INTERVAL, 0.1), MIN_INTERVAL)
+        self.assertEqual(validate_interval(MAX_INTERVAL, 0.1), MAX_INTERVAL)
+
+    def test_serialize_key_direct(self):
+        from autoclicker_core import serialize_key
+
+        self.assertEqual(
+            serialize_key(_make_special_key("f6")),
+            {"type": "special", "name": "f6"},
+        )
+        self.assertEqual(
+            serialize_key(_make_char_key("a")),
+            {"type": "char", "char": "a"},
+        )
+
+    def test_deserialize_key_direct(self):
+        from autoclicker_core import deserialize_key
+
+        result = deserialize_key({"type": "special", "name": "f6"})
+        self.assertEqual(result, mock_key.f6)
+        result = deserialize_key({"type": "char", "char": "a"})
+        self.assertEqual(result.char, "a")
+        # Invalid inputs
+        self.assertEqual(deserialize_key(None), mock_key.f6)
+        self.assertEqual(deserialize_key({"type": "char", "char": "ab"}), mock_key.f6)
+
+    def test_get_key_display_name_direct(self):
+        from autoclicker_core import get_key_display_name
+
+        self.assertEqual(get_key_display_name(_make_special_key("f6")), "F6")
+        self.assertEqual(get_key_display_name(_make_char_key("a")), "A")
+
+
+class TestSafeAfter(unittest.TestCase):
+    """Test _safe_after edge cases for both backends."""
+
+    def test_evdev_safe_after_destroyed_window(self):
+        obj = _make_evdev_obj()
+        obj.window = MagicMock()
+        obj.window.winfo_exists.return_value = False
+        # Should not raise
+        obj._safe_after(0, lambda: None)
+
+    def test_evdev_safe_after_tcl_error(self):
+        import tkinter as tk
+
+        obj = _make_evdev_obj()
+        obj.window = MagicMock()
+        obj.window.winfo_exists.return_value = True
+        obj.window.after.side_effect = tk.TclError("destroyed")
+        # Should not raise
+        obj._safe_after(0, lambda: None)
+
+    def test_evdev_safe_after_no_window(self):
+        obj = _make_evdev_obj()
+        obj.window = None
+        # Should not raise
+        obj._safe_after(0, lambda: None)
+
+    def test_pyqt_safe_after_runtime_error(self):
+        obj = object.__new__(AppWindow)
+        obj._ui_updater = MagicMock()
+        obj._ui_updater.requested = MagicMock()
+        obj._ui_updater.requested.emit.side_effect = RuntimeError("deleted")
+        # Should not raise
+        obj._safe_after(0, lambda: None)
+
+
+class TestPerformActionsEvdev(unittest.TestCase):
+    """Test evdev perform_click / perform_keypress call sequences."""
+
+    def test_perform_click_sequence(self):
+
+        obj = _make_evdev_obj()
+        obj.virtual_mouse = MagicMock()
+        obj.perform_click()
+        calls = obj.virtual_mouse.method_calls
+        # Expect: write(EV_KEY, BTN_LEFT, 1), syn(), write(EV_KEY, BTN_LEFT, 0), syn()
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(calls[0][0], "write")
+        self.assertEqual(calls[1][0], "syn")
+        self.assertEqual(calls[2][0], "write")
+        self.assertEqual(calls[3][0], "syn")
+        # Key down (value=1) then key up (value=0)
+        self.assertEqual(calls[0][1][2], 1)
+        self.assertEqual(calls[2][1][2], 0)
+
+    def test_perform_keypress_sequence(self):
+        obj = _make_evdev_obj()
+        obj.virtual_keyboard = MagicMock()
+        obj.keypresser_target_key = 57  # KEY_SPACE
+        obj.perform_keypress()
+        calls = obj.virtual_keyboard.method_calls
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(calls[0][0], "write")
+        self.assertEqual(calls[1][0], "syn")
+        self.assertEqual(calls[2][0], "write")
+        self.assertEqual(calls[3][0], "syn")
+        self.assertEqual(calls[0][1][2], 1)
+        self.assertEqual(calls[2][1][2], 0)
+
+
+class TestApplyIntervalEvdev(unittest.TestCase):
+    """Test DualAutoClicker._apply_interval with UI validation."""
+
+    def _make_obj(self):
+        obj = _make_evdev_obj()
+        obj.clicker1_lock = threading.Lock()
+        obj.clicker2_lock = threading.Lock()
+        obj.keypresser_lock = threading.Lock()
+        obj.clicker1_interval = 0.1
+        obj.clicker2_interval = 0.5
+        obj.keypresser_interval = 0.1
+        obj.save_config = MagicMock()
+        obj.window = MagicMock()
+        return obj
+
+    def test_valid_interval_applied(self):
+        obj = self._make_obj()
+        obj.interval1_var = MagicMock()
+        obj.interval1_var.get.return_value = "0.25"
+        with unittest.mock.patch("autoclicker_evdev.messagebox"):
+            obj.apply_interval1()
+        self.assertAlmostEqual(obj.clicker1_interval, 0.25)
+        obj.save_config.assert_called_once()
+
+    def test_invalid_interval_rejected(self):
+        obj = self._make_obj()
+        obj.interval1_var = MagicMock()
+        obj.interval1_var.get.return_value = "not_a_number"
+        with unittest.mock.patch("autoclicker_evdev.messagebox"):
+            obj.apply_interval1()
+        self.assertAlmostEqual(obj.clicker1_interval, 0.1)  # unchanged
+
+    def test_below_min_rejected(self):
+        obj = self._make_obj()
+        obj.interval1_var = MagicMock()
+        obj.interval1_var.get.return_value = "0.001"
+        with unittest.mock.patch("autoclicker_evdev.messagebox"):
+            obj.apply_interval1()
+        self.assertAlmostEqual(obj.clicker1_interval, 0.1)  # unchanged
+
+
+class TestDispatchHotkey(unittest.TestCase):
+    """Test the shared dispatch_hotkey from autoclicker_core."""
+
+    def test_dispatch_calls_matching_action(self):
+        from autoclicker_core import dispatch_hotkey
+
+        action = MagicMock()
+        dispatch_hotkey(
+            mock_key.f6,
+            [(mock_key.f6, action)],
+            threading.Lock(),
+            {},
+            0.2,
+        )
+        action.assert_called_once()
+
+    def test_dispatch_rate_limits(self):
+        from autoclicker_core import dispatch_hotkey
+
+        action = MagicMock()
+        state = {}
+        lock = threading.Lock()
+        dispatch_hotkey(mock_key.f6, [(mock_key.f6, action)], lock, state, 0.2)
+        dispatch_hotkey(mock_key.f6, [(mock_key.f6, action)], lock, state, 0.2)
+        self.assertEqual(action.call_count, 1)
+
+    def test_dispatch_prunes_stale(self):
+        from autoclicker_core import dispatch_hotkey
+
+        state = {f"old_{i}": 0.0 for i in range(25)}  # 25 stale entries
+        lock = threading.Lock()
+        dispatch_hotkey(mock_key.f6, [(mock_key.f6, MagicMock())], lock, state, 0.2)
+        self.assertLess(len(state), 25)
+
+
+class TestApplyIntervalPyQt(unittest.TestCase):
+    """Test AppWindow._apply_interval (PyQt6 backend)."""
+
+    def _make_obj(self):
+        obj = object.__new__(AppWindow)
+        obj.clicker1_lock = threading.Lock()
+        obj.clicker2_lock = threading.Lock()
+        obj.keypresser_lock = threading.Lock()
+        obj.clicker1_interval = 0.1
+        obj.clicker2_interval = 0.5
+        obj.keypresser_interval = 0.1
+        obj._save_config = MagicMock()
+        obj._ui_updater = MagicMock()
+        obj._ui_updater.requested = MagicMock()
+        return obj
+
+    def test_valid_interval_applied(self):
+        obj = self._make_obj()
+        edit = MagicMock()
+        edit.text.return_value = "0.25"
+        with unittest.mock.patch("autoclicker.QMessageBox"):
+            obj._apply_interval(edit, "clicker1_interval", "Clicker 1")
+        self.assertAlmostEqual(obj.clicker1_interval, 0.25)
+        obj._save_config.assert_called_once()
+
+    def test_invalid_interval_rejected(self):
+        obj = self._make_obj()
+        edit = MagicMock()
+        edit.text.return_value = "not_a_number"
+        with unittest.mock.patch("autoclicker.QMessageBox"):
+            obj._apply_interval(edit, "clicker1_interval", "Clicker 1")
+        self.assertAlmostEqual(obj.clicker1_interval, 0.1)  # unchanged
+
+    def test_below_min_rejected(self):
+        obj = self._make_obj()
+        edit = MagicMock()
+        edit.text.return_value = "0.001"
+        with unittest.mock.patch("autoclicker.QMessageBox"):
+            obj._apply_interval(edit, "clicker1_interval", "Clicker 1")
+        self.assertAlmostEqual(obj.clicker1_interval, 0.1)  # unchanged
+
+    def test_above_max_rejected(self):
+        obj = self._make_obj()
+        edit = MagicMock()
+        edit.text.return_value = "999"
+        with unittest.mock.patch("autoclicker.QMessageBox"):
+            obj._apply_interval(edit, "clicker1_interval", "Clicker 1")
+        self.assertAlmostEqual(obj.clicker1_interval, 0.1)  # unchanged
+
+    def test_keypresser_interval_uses_correct_lock(self):
+        obj = self._make_obj()
+        edit = MagicMock()
+        edit.text.return_value = "0.3"
+        with unittest.mock.patch("autoclicker.QMessageBox"):
+            obj._apply_interval(edit, "keypresser_interval", "Key Presser")
+        self.assertAlmostEqual(obj.keypresser_interval, 0.3)
+
+
+class TestOnKeyPressCapturePyQt(unittest.TestCase):
+    """Test AppWindow._on_key_press in hotkey capture mode."""
+
+    def _make_obj(self):
+        obj = object.__new__(AppWindow)
+        obj.hotkey_capture_lock = threading.Lock()
+        obj.listening_for_hotkey = False
+        obj.hotkey_target = None
+        obj.clicker1_hotkey = mock_key.f6
+        obj.clicker1_hotkey_display = "F6"
+        obj.clicker2_hotkey = mock_key.f7
+        obj.clicker2_hotkey_display = "F7"
+        obj.keypresser_hotkey = mock_key.f8
+        obj.keypresser_hotkey_display = "F8"
+        obj.emergency_stop_hotkey = mock_key.f9
+        obj.emergency_stop_hotkey_display = "F9"
+        obj._hotkey1_btn = MagicMock()
+        obj._hotkey2_btn = MagicMock()
+        obj._kp_hotkey_btn = MagicMock()
+        obj._emergency_stop_btn = MagicMock()
+        obj._save_config = MagicMock()
+        obj._ui_updater = MagicMock()
+        obj._ui_updater.requested = MagicMock()
+        obj.last_hotkey_time = {}
+        obj.hotkey_timing_lock = threading.Lock()
+        obj.hotkey_cooldown = 0.2
+        obj.toggle_clicker1 = MagicMock()
+        obj.toggle_clicker2 = MagicMock()
+        obj.toggle_keypresser = MagicMock()
+        obj.emergency_stop_all = MagicMock()
+        return obj
+
+    def test_capture_mode_sets_hotkey(self):
+        obj = self._make_obj()
+        obj.listening_for_hotkey = True
+        obj.hotkey_target = "clicker1"
+        obj._on_key_press(mock_key.f7)
+        self.assertFalse(obj.listening_for_hotkey)
+        self.assertEqual(obj.clicker1_hotkey, mock_key.f7)
+        obj._save_config.assert_called_once()
+
+    def test_capture_mode_resets_flag(self):
+        obj = self._make_obj()
+        obj.listening_for_hotkey = True
+        obj.hotkey_target = "emergency_stop"
+        obj._on_key_press(mock_key.f6)
+        self.assertFalse(obj.listening_for_hotkey)
+        self.assertEqual(obj.emergency_stop_hotkey, mock_key.f6)
+
+    def test_non_capture_dispatches_normally(self):
+        obj = self._make_obj()
+        obj.listening_for_hotkey = False
+        obj._on_key_press(mock_key.f6)
+        obj.toggle_clicker1.assert_called_once()
+
+
+class TestOnKeyCaptureEvdev(unittest.TestCase):
+    """Test DualAutoClicker._on_key_press in hotkey capture mode."""
+
+    def _make_obj(self):
+        obj = _make_evdev_obj()
+        obj.hotkey_capture_lock = threading.Lock()
+        obj.listening_for_hotkey = False
+        obj.hotkey_target = None
+        obj.clicker1_hotkey = mock_key.f6
+        obj.clicker1_hotkey_display = "F6"
+        obj.clicker2_hotkey = mock_key.f7
+        obj.clicker2_hotkey_display = "F7"
+        obj.keypresser_hotkey = mock_key.f8
+        obj.keypresser_hotkey_display = "F8"
+        obj.emergency_stop_hotkey = mock_key.f9
+        obj.emergency_stop_hotkey_display = "F9"
+        obj.hotkey1_button = MagicMock()
+        obj.hotkey2_button = MagicMock()
+        obj.keypresser_hotkey_button = MagicMock()
+        obj.emergency_stop_button = MagicMock()
+        obj.save_config = MagicMock()
+        obj.window = MagicMock()
+        obj.last_hotkey_time = {}
+        obj.hotkey_timing_lock = threading.Lock()
+        obj.hotkey_cooldown = 0.2
+        obj.toggle_clicker1 = MagicMock()
+        obj.toggle_clicker2 = MagicMock()
+        obj.toggle_keypresser = MagicMock()
+        obj.emergency_stop_all = MagicMock()
+        return obj
+
+    def test_capture_mode_sets_hotkey(self):
+        obj = self._make_obj()
+        obj.listening_for_hotkey = True
+        obj.hotkey_target = "clicker2"
+        obj._on_key_press(mock_key.f9)
+        self.assertFalse(obj.listening_for_hotkey)
+        self.assertEqual(obj.clicker2_hotkey, mock_key.f9)
+        obj.save_config.assert_called_once()
+
+    def test_non_capture_dispatches_normally(self):
+        obj = self._make_obj()
+        obj.listening_for_hotkey = False
+        obj._on_key_press(mock_key.f7)
+        obj.toggle_clicker2.assert_called_once()
+
+
+class TestDuplicateHotkey(unittest.TestCase):
+    """Test behavior when two features share the same hotkey."""
+
+    def test_first_match_wins(self):
+        from autoclicker_core import dispatch_hotkey
+
+        action1 = MagicMock()
+        action2 = MagicMock()
+        dispatch_hotkey(
+            mock_key.f6,
+            [(mock_key.f6, action1), (mock_key.f6, action2)],
+            threading.Lock(),
+            {},
+            0.2,
+        )
+        action1.assert_called_once()
+        action2.assert_not_called()
+
+
+class TestActionLoopDriftReset(unittest.TestCase):
+    """Test action_loop handles overrun (action slower than interval)."""
+
+    def test_drift_reset_does_not_hang(self):
+        from autoclicker_core import action_loop as _action_loop
+
+        stop = threading.Event()
+        call_count = {"n": 0}
+
+        def slow_action():
+            call_count["n"] += 1
+            time.sleep(0.005)  # action takes 5ms, interval is 1ms
+            if call_count["n"] >= 5:
+                stop.set()
+
+        _action_loop(stop, lambda: 0.001, slow_action, lambda e: None)
+        self.assertGreaterEqual(call_count["n"], 5)
+
+
+class TestVerifyOversizedResponse(unittest.TestCase):
+    """Test _verify_file_against_github rejects oversized API responses."""
+
+    def test_oversized_api_response_raises(self):
+        obj = object.__new__(AppWindow)
+        content = b"hello"
+
+        mock_response = MagicMock()
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        # Return exactly MAX_METADATA_RESPONSE_SIZE + 1 bytes
+        from autoclicker import MAX_METADATA_RESPONSE_SIZE
+
+        mock_response.read.return_value = b"x" * (MAX_METADATA_RESPONSE_SIZE + 1)
+
+        import urllib.request
+
+        with unittest.mock.patch.object(
+            urllib.request, "urlopen", return_value=mock_response
+        ):
+            with self.assertRaises(ValueError):
+                obj._verify_file_against_github(
+                    "v1.0", "test.py", content, {"User-Agent": "test"}
+                )
+
+
+class TestThreadJoinVerification(unittest.TestCase):
+    """Verify threads actually stop after stop is called."""
+
+    def _make_pyqt_clicker(self):
+        obj = object.__new__(AppWindow)
+        obj.clicker1_lock = threading.Lock()
+        obj.clicker2_lock = threading.Lock()
+        obj.keypresser_lock = threading.Lock()
+        obj.clicker1_clicking = False
+        obj.clicker2_clicking = False
+        obj.keypresser_pressing = False
+        obj.clicker1_interval = 0.01
+        obj.clicker2_interval = 0.01
+        obj.keypresser_interval = 0.01
+        obj.clicker1_thread = None
+        obj.clicker2_thread = None
+        obj.keypresser_thread = None
+        obj.clicker1_stop = threading.Event()
+        obj.clicker1_stop.set()
+        obj.clicker2_stop = threading.Event()
+        obj.clicker2_stop.set()
+        obj.keypresser_stop = threading.Event()
+        obj.keypresser_stop.set()
+        obj.keypresser_target_key = mock_key.space
+        obj.mouse_controller = MagicMock()
+        obj.keyboard_controller = MagicMock()
+        obj._status1_label = MagicMock()
+        obj._status2_label = MagicMock()
+        obj._kp_status_label = MagicMock()
+        obj._ui_updater = MagicMock()
+        obj._ui_updater.requested = MagicMock()
+        return obj
+
+    def test_thread_actually_stops(self):
+        obj = self._make_pyqt_clicker()
+        obj.perform_click = MagicMock()
+        obj.start_clicker1()
+        self.assertTrue(obj.clicker1_clicking)
+        obj.stop_clicker1()
+        if obj.clicker1_thread:
+            obj.clicker1_thread.join(timeout=2)
+            self.assertFalse(
+                obj.clicker1_thread.is_alive(), "Thread did not stop within timeout"
+            )
+
+    def test_keypresser_thread_stops(self):
+        obj = self._make_pyqt_clicker()
+        obj.perform_keypress = MagicMock()
+        obj.start_keypresser()
+        self.assertTrue(obj.keypresser_pressing)
+        obj.stop_keypresser()
+        if obj.keypresser_thread:
+            obj.keypresser_thread.join(timeout=2)
+            self.assertFalse(
+                obj.keypresser_thread.is_alive(),
+                "Keypresser thread did not stop within timeout",
+            )
+
+
+class TestConfigTargetKeyRoundtripPyQt(unittest.TestCase):
+    """Verify keypresser_target_key survives PyQt6 config save/load."""
+
+    def test_roundtrip_target_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = Path(tmpdir) / "autoclicker" / "config.json"
+            obj = object.__new__(AppWindow)
+            obj.clicker1_interval = 0.1
+            obj.clicker2_interval = 0.5
+            obj.clicker1_hotkey = mock_key.f6
+            obj.clicker1_hotkey_display = "F6"
+            obj.clicker2_hotkey = mock_key.f7
+            obj.clicker2_hotkey_display = "F7"
+            obj.keypresser_interval = 0.1
+            obj.keypresser_hotkey = mock_key.f8
+            obj.keypresser_hotkey_display = "F8"
+            obj.keypresser_target_key = mock_key.enter
+            obj.keypresser_target_key_display = "Enter"
+            obj.emergency_stop_hotkey = mock_key.f9
+            obj.emergency_stop_hotkey_display = "F9"
+            obj.auto_check_updates = True
+            geo = MagicMock()
+            geo.width.return_value = 600
+            geo.height.return_value = 800
+            geo.x.return_value = 100
+            geo.y.return_value = 50
+            obj.geometry = MagicMock(return_value=geo)
+            type(obj)._config_path = property(lambda self: cfg)
+            obj._save_config()
+
+            obj2 = object.__new__(AppWindow)
+            obj2.clicker1_interval = 0.1
+            obj2.clicker2_interval = 0.5
+            obj2.clicker1_hotkey = mock_key.f6
+            obj2.clicker1_hotkey_display = "F6"
+            obj2.clicker2_hotkey = mock_key.f7
+            obj2.clicker2_hotkey_display = "F7"
+            obj2.keypresser_interval = 0.1
+            obj2.keypresser_hotkey = mock_key.f8
+            obj2.keypresser_hotkey_display = "F8"
+            obj2.keypresser_target_key = mock_key.space
+            obj2.keypresser_target_key_display = "Space"
+            obj2.emergency_stop_hotkey = mock_key.f9
+            obj2.emergency_stop_hotkey_display = "F9"
+            obj2.auto_check_updates = True
+            obj2.resize = MagicMock()
+            obj2.move = MagicMock()
+            type(obj2)._config_path = property(lambda self: cfg)
+            obj2._load_config()
+
+            self.assertEqual(obj2.keypresser_target_key_display, "Enter")
 
 
 if __name__ == "__main__":

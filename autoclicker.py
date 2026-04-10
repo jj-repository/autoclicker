@@ -14,6 +14,7 @@ use autoclicker_evdev.py instead (requires root/uinput permissions).
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import os
 import platform
@@ -22,7 +23,9 @@ import shutil
 import sys
 import tempfile
 import threading
-import time
+import urllib.error
+import urllib.request
+import webbrowser
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal, QObject
@@ -63,6 +66,8 @@ from autoclicker_core import (
     DEFAULT_CLICKER1_INTERVAL,
     DEFAULT_CLICKER2_INTERVAL,
     DEFAULT_KEYPRESSER_INTERVAL,
+    action_loop,
+    dispatch_hotkey,
     validate_interval,
     serialize_key,
     deserialize_key,
@@ -72,7 +77,6 @@ from autoclicker_core import (
 # ── App identity ──────────────────────────────────────────────────────
 APP_NAME = "AutoClicker"
 __version__ = "1.12"
-VERSION = __version__
 WINDOW_SIZE = (560, 820)
 
 # ── Color palette ─────────────────────────────────────────────────────
@@ -93,6 +97,8 @@ GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest
 GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}"
 
 MAX_DOWNLOAD_SIZE = 5 * 1024 * 1024
+MAX_API_RESPONSE_SIZE = 1 * 1024 * 1024
+MAX_METADATA_RESPONSE_SIZE = 512 * 1024
 
 
 # ── Stylesheets ───────────────────────────────────────────────────────
@@ -198,6 +204,9 @@ QToolTip {{ background: #2d2d2d; color: #dcdcdc; border: 1px solid #555; }}
 
 # ── App settings persistence (dark mode) ─────────────────────────────
 
+_settings_cache: dict | None = None
+_DARK_STYLE_CACHE: str | None = None
+
 
 def _settings_path() -> Path:
     if platform.system() == "Windows":
@@ -208,16 +217,23 @@ def _settings_path() -> Path:
 
 
 def _load_settings() -> dict:
+    global _settings_cache
+    if _settings_cache is not None:
+        return _settings_cache
     p = _settings_path()
     if p.is_file():
         try:
-            return json.loads(p.read_text())
+            _settings_cache = json.loads(p.read_text())
+            return _settings_cache
         except (json.JSONDecodeError, OSError):
             pass
-    return {}
+    _settings_cache = {}
+    return _settings_cache
 
 
 def _save_settings(data: dict):
+    global _settings_cache
+    _settings_cache = data
     p = _settings_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(data, indent=2))
@@ -339,7 +355,7 @@ class KeyCaptureDialog(QDialog):
                 self.captured_display = text.upper()
                 self.accept()
                 return
-            except Exception:
+            except (ValueError, TypeError):
                 pass
 
         QMessageBox.warning(
@@ -360,7 +376,7 @@ class KeyCaptureDialog(QDialog):
 class AppWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"{APP_NAME} v{VERSION}")
+        self.setWindowTitle(f"{APP_NAME} v{__version__}")
         self.setWindowIcon(_make_icon())
         self.resize(*WINDOW_SIZE)
         self.setMinimumSize(480, 500)
@@ -374,19 +390,21 @@ class AppWindow(QMainWindow):
         self.keypresser_lock = threading.Lock()
         self.hotkey_capture_lock = threading.Lock()
 
-        # Clicker 1
         self.clicker1_hotkey = Key.f6
         self.clicker1_hotkey_display = "F6"
         self.clicker1_interval = DEFAULT_CLICKER1_INTERVAL
         self.clicker1_clicking = False
         self.clicker1_thread = None
+        self.clicker1_stop = threading.Event()
+        self.clicker1_stop.set()
 
-        # Clicker 2
         self.clicker2_hotkey = Key.f7
         self.clicker2_hotkey_display = "F7"
         self.clicker2_interval = DEFAULT_CLICKER2_INTERVAL
         self.clicker2_clicking = False
         self.clicker2_thread = None
+        self.clicker2_stop = threading.Event()
+        self.clicker2_stop.set()
 
         # Key Presser
         self.keypresser_hotkey = Key.f8
@@ -396,6 +414,8 @@ class AppWindow(QMainWindow):
         self.keypresser_target_key_display = "Space"
         self.keypresser_pressing = False
         self.keypresser_thread = None
+        self.keypresser_stop = threading.Event()
+        self.keypresser_stop.set()
 
         # Emergency Stop
         self.emergency_stop_hotkey = Key.f9
@@ -405,7 +425,6 @@ class AppWindow(QMainWindow):
         self.mouse_controller = mouse.Controller()
         self.keyboard_controller = keyboard.Controller()
         self.keyboard_listener = None
-        self.hotkey_capture_listener = None
         self.listening_for_hotkey = False
         self.hotkey_target = None
 
@@ -444,7 +463,6 @@ class AppWindow(QMainWindow):
         # Apply theme (needs _dark_mode_cb created by _build_settings_tab)
         self._apply_theme()
 
-        # Start keyboard listener
         self.start_keyboard_listener()
 
         # Auto-check updates on startup
@@ -464,9 +482,7 @@ class AppWindow(QMainWindow):
             if delay_ms <= 0:
                 self._ui_updater.requested.emit(callback)
             else:
-                self._ui_updater.requested.emit(
-                    lambda: QTimer.singleShot(delay_ms, callback)
-                )
+                self._ui_updater.requested.emit(lambda: QTimer.singleShot(delay_ms, callback))
         except RuntimeError:
             pass
 
@@ -491,7 +507,6 @@ class AppWindow(QMainWindow):
         # ── Clickers side by side ─────────────────────────────
         clickers_row = QHBoxLayout()
 
-        # Clicker 1
         c1_group = QGroupBox("Clicker 1")
         c1 = QVBoxLayout()
         c1.addWidget(QLabel("Interval (seconds):"))
@@ -518,7 +533,6 @@ class AppWindow(QMainWindow):
         c1_group.setLayout(c1)
         clickers_row.addWidget(c1_group)
 
-        # Clicker 2
         c2_group = QGroupBox("Clicker 2")
         c2 = QVBoxLayout()
         c2.addWidget(QLabel("Interval (seconds):"))
@@ -555,9 +569,7 @@ class AppWindow(QMainWindow):
         )
         emerg = QHBoxLayout()
         emerg.addWidget(QLabel("Hotkey:"))
-        self._emergency_stop_btn = QPushButton(
-            f"Current: {self.emergency_stop_hotkey_display}"
-        )
+        self._emergency_stop_btn = QPushButton(f"Current: {self.emergency_stop_hotkey_display}")
         self._emergency_stop_btn.clicked.connect(
             lambda: self.start_hotkey_capture("emergency_stop")
         )
@@ -570,12 +582,9 @@ class AppWindow(QMainWindow):
         kp_group = QGroupBox("Keyboard Key Presser")
         kp_cols = QHBoxLayout()
 
-        # Left column
         kp_left = QVBoxLayout()
         kp_left.addWidget(QLabel("Key to Press:"))
-        self._kp_target_btn = QPushButton(
-            f"Current: {self.keypresser_target_key_display}"
-        )
+        self._kp_target_btn = QPushButton(f"Current: {self.keypresser_target_key_display}")
         self._kp_target_btn.clicked.connect(self._select_target_key)
         kp_left.addWidget(self._kp_target_btn)
         kp_left.addSpacing(8)
@@ -592,13 +601,10 @@ class AppWindow(QMainWindow):
         kp_left.addStretch()
         kp_cols.addLayout(kp_left)
 
-        # Right column
         kp_right = QVBoxLayout()
         kp_right.addWidget(QLabel("Toggle Hotkey:"))
         self._kp_hotkey_btn = QPushButton(f"Current: {self.keypresser_hotkey_display}")
-        self._kp_hotkey_btn.clicked.connect(
-            lambda: self.start_hotkey_capture("keypresser")
-        )
+        self._kp_hotkey_btn.clicked.connect(lambda: self.start_hotkey_capture("keypresser"))
         kp_right.addWidget(self._kp_hotkey_btn)
         kp_right.addSpacing(8)
         kp_right.addWidget(QLabel("Status:"))
@@ -633,7 +639,6 @@ class AppWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        # Repo link
         repo_label = QLabel(
             f'<a href="https://github.com/{GITHUB_REPO}">github.com/{GITHUB_REPO}</a>'
         )
@@ -642,21 +647,18 @@ class AppWindow(QMainWindow):
         layout.addWidget(repo_label)
         layout.addSpacing(12)
 
-        # Check for Updates button
         update_btn = QPushButton("Check for Updates")
         update_btn.setToolTip("Check GitHub for a new version")
         update_btn.clicked.connect(self._check_for_updates_clicked)
         layout.addWidget(update_btn)
         layout.addSpacing(8)
 
-        # Auto-check updates
         self._auto_update_cb = QCheckBox("Check for Updates on Startup")
         self._auto_update_cb.setChecked(self.auto_check_updates)
         self._auto_update_cb.stateChanged.connect(self._toggle_auto_check_updates)
         layout.addWidget(self._auto_update_cb)
         layout.addSpacing(12)
 
-        # Dark mode toggle
         self._dark_mode_cb = QCheckBox("Dark Mode")
         self._dark_mode_cb.setChecked(_load_settings().get("dark_mode", True))
         self._dark_mode_cb.stateChanged.connect(self._on_dark_mode_toggled)
@@ -702,23 +704,18 @@ class AppWindow(QMainWindow):
         layout.addWidget(title)
         layout.addSpacing(8)
 
-        # Action buttons
         btns = QHBoxLayout()
         readme_btn = _colored_btn("Readme", BLUE)
         readme_btn.setToolTip("Open documentation on GitHub")
         readme_btn.clicked.connect(
-            lambda: QDesktopServices.openUrl(
-                QUrl(f"https://github.com/{GITHUB_REPO}#readme")
-            )
+            lambda: QDesktopServices.openUrl(QUrl(f"https://github.com/{GITHUB_REPO}#readme"))
         )
         btns.addWidget(readme_btn)
 
         report_btn = _colored_btn("Report Bug", YELLOW, text_color="#1e1e1e")
         report_btn.setToolTip("Report an issue on GitHub")
         report_btn.clicked.connect(
-            lambda: QDesktopServices.openUrl(
-                QUrl(f"https://github.com/{GITHUB_REPO}/issues/new")
-            )
+            lambda: QDesktopServices.openUrl(QUrl(f"https://github.com/{GITHUB_REPO}/issues/new"))
         )
         btns.addWidget(report_btn)
 
@@ -733,7 +730,6 @@ class AppWindow(QMainWindow):
         layout.addWidget(sep)
         layout.addSpacing(8)
 
-        # Help sections
         help_sections = [
             (
                 "Getting Started",
@@ -800,9 +796,10 @@ class AppWindow(QMainWindow):
 
     def _apply_theme(self):
         if self._dark_mode_cb.isChecked():
-            if not hasattr(self, "_dark_style_cache"):
-                self._dark_style_cache = _build_dark_style()
-            QApplication.instance().setStyleSheet(self._dark_style_cache)
+            global _DARK_STYLE_CACHE
+            if _DARK_STYLE_CACHE is None:
+                _DARK_STYLE_CACHE = _build_dark_style()
+            QApplication.instance().setStyleSheet(_DARK_STYLE_CACHE)
         else:
             QApplication.instance().setStyleSheet(_LIGHT_STYLE)
 
@@ -848,9 +845,7 @@ class AppWindow(QMainWindow):
         )
         if "keypresser_hotkey" in config:
             self.keypresser_hotkey = self._deserialize_key(config["keypresser_hotkey"])
-            self.keypresser_hotkey_display = config.get(
-                "keypresser_hotkey_display", "F8"
-            )
+            self.keypresser_hotkey_display = config.get("keypresser_hotkey_display", "F8")
         if "keypresser_target_key_pynput" in config:
             self.keypresser_target_key = self._deserialize_key(
                 config["keypresser_target_key_pynput"]
@@ -860,31 +855,43 @@ class AppWindow(QMainWindow):
             )
 
         if "emergency_stop_hotkey" in config:
-            self.emergency_stop_hotkey = self._deserialize_key(
-                config["emergency_stop_hotkey"]
-            )
-            self.emergency_stop_hotkey_display = config.get(
-                "emergency_stop_hotkey_display", "F9"
-            )
+            self.emergency_stop_hotkey = self._deserialize_key(config["emergency_stop_hotkey"])
+            self.emergency_stop_hotkey_display = config.get("emergency_stop_hotkey_display", "F9")
 
         if "auto_check_updates" in config:
             self.auto_check_updates = bool(config.get("auto_check_updates", True))
 
         # Restore window geometry (supports old tkinter format + new dict)
         geo = config.get("window_geometry")
+
+        def _clamp(val, lo, hi):
+            return max(lo, min(hi, val))
+
         if isinstance(geo, str) and "x" in geo:
             parts = geo.replace("+", "x").split("x")
             try:
                 if len(parts) >= 2:
-                    self.resize(int(parts[0]), int(parts[1]))
+                    self.resize(
+                        _clamp(int(parts[0]), 200, 4000),
+                        _clamp(int(parts[1]), 200, 4000),
+                    )
                 if len(parts) >= 4:
-                    self.move(int(parts[2]), int(parts[3]))
+                    self.move(
+                        _clamp(int(parts[2]), -2000, 8000),
+                        _clamp(int(parts[3]), -2000, 8000),
+                    )
             except (ValueError, IndexError):
                 pass
         elif isinstance(geo, dict):
-            self.resize(geo.get("w", WINDOW_SIZE[0]), geo.get("h", WINDOW_SIZE[1]))
+            self.resize(
+                _clamp(geo.get("w", WINDOW_SIZE[0]), 200, 4000),
+                _clamp(geo.get("h", WINDOW_SIZE[1]), 200, 4000),
+            )
             if "x" in geo and "y" in geo:
-                self.move(geo["x"], geo["y"])
+                self.move(
+                    _clamp(geo["x"], -2000, 8000),
+                    _clamp(geo["y"], -2000, 8000),
+                )
 
     def _save_config(self):
         """Save current configuration to JSON file, merging with existing."""
@@ -909,13 +916,9 @@ class AppWindow(QMainWindow):
                 "keypresser_interval": self.keypresser_interval,
                 "keypresser_hotkey": self._serialize_key(self.keypresser_hotkey),
                 "keypresser_hotkey_display": self.keypresser_hotkey_display,
-                "keypresser_target_key_pynput": self._serialize_key(
-                    self.keypresser_target_key
-                ),
+                "keypresser_target_key_pynput": self._serialize_key(self.keypresser_target_key),
                 "keypresser_target_key_display": self.keypresser_target_key_display,
-                "emergency_stop_hotkey": self._serialize_key(
-                    self.emergency_stop_hotkey
-                ),
+                "emergency_stop_hotkey": self._serialize_key(self.emergency_stop_hotkey),
                 "emergency_stop_hotkey_display": self.emergency_stop_hotkey_display,
                 "auto_check_updates": self.auto_check_updates,
                 "window_geometry": {
@@ -926,8 +929,10 @@ class AppWindow(QMainWindow):
                 },
             }
             existing.update(config)
-            self._config_path.write_text(json.dumps(existing, indent=2))
-        except Exception as e:
+            tmp = self._config_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(existing, indent=2))
+            os.replace(str(tmp), str(self._config_path))
+        except (OSError, ValueError, TypeError) as e:
             print(f"Error saving config: {e}")
 
     _serialize_key = staticmethod(serialize_key)
@@ -943,8 +948,7 @@ class AppWindow(QMainWindow):
             val = float(edit.text())
             if val < MIN_INTERVAL:
                 raise ValueError(
-                    f"Interval must be at least {MIN_INTERVAL}s "
-                    "(prevents system overload)"
+                    f"Interval must be at least {MIN_INTERVAL}s (prevents system overload)"
                 )
             if val > MAX_INTERVAL:
                 raise ValueError(f"Interval must be at most {MAX_INTERVAL}s")
@@ -960,9 +964,7 @@ class AppWindow(QMainWindow):
             else:
                 setattr(self, target_attr, val)
             self._save_config()
-            QMessageBox.information(
-                self, "Success", f"{name} interval updated to {val}s"
-            )
+            QMessageBox.information(self, "Success", f"{name} interval updated to {val}s")
         except ValueError as e:
             QMessageBox.critical(self, "Error", f"Invalid interval: {e}")
 
@@ -973,9 +975,7 @@ class AppWindow(QMainWindow):
         self._apply_interval(self._interval2_edit, "clicker2_interval", "Clicker 2")
 
     def _apply_keypresser_interval(self):
-        self._apply_interval(
-            self._kp_interval_edit, "keypresser_interval", "Key Presser"
-        )
+        self._apply_interval(self._kp_interval_edit, "keypresser_interval", "Key Presser")
 
     # ══════════════════════════════════════════════════════════════
     #  Target key selection
@@ -1010,57 +1010,52 @@ class AppWindow(QMainWindow):
         if btn:
             btn.setText("Press a key...")
 
-        self.stop_keyboard_listener()
-
-        with self.hotkey_capture_lock:
-            self.hotkey_capture_listener = keyboard.Listener(
-                on_press=self.capture_hotkey
-            )
-            self.hotkey_capture_listener.start()
-
-    def capture_hotkey(self, key):
-        with self.hotkey_capture_lock:
-            if not self.listening_for_hotkey:
+    def _on_key_press(self, key):
+        """Unified key press handler: capture mode or normal hotkey dispatch."""
+        if self.listening_for_hotkey:
+            with self.hotkey_capture_lock:
+                if not self.listening_for_hotkey:
+                    self.on_hotkey_press(key)
+                    return
+                self.listening_for_hotkey = False
+                target = self.hotkey_target
+                # Process capture inline
+                key_display = self.get_key_display_name(key)
+                attr_map = {
+                    "clicker1": (
+                        "clicker1_hotkey",
+                        "clicker1_hotkey_display",
+                        "_hotkey1_btn",
+                    ),
+                    "clicker2": (
+                        "clicker2_hotkey",
+                        "clicker2_hotkey_display",
+                        "_hotkey2_btn",
+                    ),
+                    "keypresser": (
+                        "keypresser_hotkey",
+                        "keypresser_hotkey_display",
+                        "_kp_hotkey_btn",
+                    ),
+                    "emergency_stop": (
+                        "emergency_stop_hotkey",
+                        "emergency_stop_hotkey_display",
+                        "_emergency_stop_btn",
+                    ),
+                }
+                if target in attr_map:
+                    key_attr, display_attr, btn_attr = attr_map[target]
+                    setattr(self, key_attr, key)
+                    setattr(self, display_attr, key_display)
+                    btn = getattr(self, btn_attr)
+                    self._safe_after(
+                        0,
+                        lambda b=btn, d=key_display: b.setText(f"Current: {d}"),
+                    )
+                self._save_config()
                 return
-            self.listening_for_hotkey = False
-            target = self.hotkey_target
-
-        key_display = self.get_key_display_name(key)
-
-        attr_map = {
-            "clicker1": (
-                "clicker1_hotkey",
-                "clicker1_hotkey_display",
-                "_hotkey1_btn",
-            ),
-            "clicker2": (
-                "clicker2_hotkey",
-                "clicker2_hotkey_display",
-                "_hotkey2_btn",
-            ),
-            "keypresser": (
-                "keypresser_hotkey",
-                "keypresser_hotkey_display",
-                "_kp_hotkey_btn",
-            ),
-            "emergency_stop": (
-                "emergency_stop_hotkey",
-                "emergency_stop_hotkey_display",
-                "_emergency_stop_btn",
-            ),
-        }
-        if target in attr_map:
-            key_attr, display_attr, btn_attr = attr_map[target]
-            setattr(self, key_attr, key)
-            setattr(self, display_attr, key_display)
-            btn = getattr(self, btn_attr)
-            self._safe_after(0, lambda b=btn, d=key_display: b.setText(f"Current: {d}"))
-
-        with self.hotkey_capture_lock:
-            self.hotkey_capture_listener = None
-        self._save_config()
-        self._safe_after(0, self.start_keyboard_listener)
-        return False  # Stop this pynput listener
+        # Normal hotkey dispatch
+        self.on_hotkey_press(key)
 
     get_key_display_name = staticmethod(_core_get_key_display_name)
 
@@ -1076,70 +1071,47 @@ class AppWindow(QMainWindow):
         self.keyboard_controller.release(target_key)
 
     def on_hotkey_press(self, key):
-        try:
-            current_time = time.time()
-            key_str = str(key)
-            with self.hotkey_timing_lock:
-                if key_str in self.last_hotkey_time:
-                    if (
-                        current_time - self.last_hotkey_time[key_str]
-                        < self.hotkey_cooldown
-                    ):
-                        return
-                self.last_hotkey_time[key_str] = current_time
-
-            if key == self.emergency_stop_hotkey:
-                self.emergency_stop_all()
-            elif key == self.clicker1_hotkey:
-                self.toggle_clicker1()
-            elif key == self.clicker2_hotkey:
-                self.toggle_clicker2()
-            elif key == self.keypresser_hotkey:
-                self.toggle_keypresser()
-        except AttributeError:
-            pass
-
-    # ── Shared action loop ─────────────────────────────────────
-
-    def _set_status(self, label, text, color):
-        self._safe_after(0, lambda: label.setText(text))
-        self._safe_after(
-            0, lambda: label.setStyleSheet(f"font-weight: bold; color: {color};")
+        dispatch_hotkey(
+            key,
+            [
+                (self.emergency_stop_hotkey, self.emergency_stop_all),
+                (self.clicker1_hotkey, self.toggle_clicker1),
+                (self.clicker2_hotkey, self.toggle_clicker2),
+                (self.keypresser_hotkey, self.toggle_keypresser),
+            ],
+            self.hotkey_timing_lock,
+            self.last_hotkey_time,
+            self.hotkey_cooldown,
         )
 
-    def _action_loop(
-        self, lock, flag_attr, interval_attr, action_fn, label, name, extra_attr=None
-    ):
-        next_time = time.monotonic()
-        while True:
-            with lock:
-                if not getattr(self, flag_attr):
-                    break
-                interval = getattr(self, interval_attr)
-                extra = getattr(self, extra_attr) if extra_attr else None
-            try:
-                action_fn() if extra is None else action_fn(extra)
-            except Exception as e:
-                print(f"Error in {name}: {e}")
-                with lock:
-                    setattr(self, flag_attr, False)
-                self._set_status(label, "Error", STATUS_ERROR_COLOR)
-                break
-            next_time += interval
-            sleep_dur = next_time - time.monotonic()
-            if sleep_dur > 0:
-                time.sleep(sleep_dur)
-            else:
-                next_time = time.monotonic()
+    # ── Shared helpers ───────────────────────────────────────────
+
+    def _set_status(self, label, text, color):
+        self._safe_after(
+            0,
+            lambda: (
+                label.setText(text),
+                label.setStyleSheet(f"font-weight: bold; color: {color};"),
+            ),
+        )
 
     # ── Clicker 1 ─────────────────────────────────────────────
 
     def toggle_clicker1(self):
+        old_thread = None
+        should_start = False
         with self.clicker1_lock:
             if self.clicker1_clicking:
                 self._stop_clicker1_locked()
+                old_thread = self.clicker1_thread
             else:
-                self.stop_clicker2()
+                should_start = True
+                old_thread = self.clicker1_thread
+        if old_thread and old_thread.is_alive():
+            old_thread.join(timeout=0.5)
+        if should_start:
+            self.stop_clicker2()
+            with self.clicker1_lock:
                 self._start_clicker1_locked()
 
     def start_clicker1(self):
@@ -1149,16 +1121,22 @@ class AppWindow(QMainWindow):
     def _start_clicker1_locked(self):
         if not self.clicker1_clicking:
             self.clicker1_clicking = True
+            self.clicker1_stop.clear()
             self._set_status(self._status1_label, "Clicking...", STATUS_ACTIVE_COLOR)
+
+            def on_error(e):
+                print(f"Error in clicker 1: {e}")
+                with self.clicker1_lock:
+                    self.clicker1_clicking = False
+                self._set_status(self._status1_label, "Error", STATUS_ERROR_COLOR)
+
             self.clicker1_thread = threading.Thread(
-                target=self._action_loop,
+                target=action_loop,
                 args=(
-                    self.clicker1_lock,
-                    "clicker1_clicking",
-                    "clicker1_interval",
+                    self.clicker1_stop,
+                    lambda: self.clicker1_interval,
                     self.perform_click,
-                    self._status1_label,
-                    "clicker 1",
+                    on_error,
                 ),
                 daemon=True,
             )
@@ -1171,16 +1149,26 @@ class AppWindow(QMainWindow):
     def _stop_clicker1_locked(self):
         if self.clicker1_clicking:
             self.clicker1_clicking = False
+            self.clicker1_stop.set()
             self._set_status(self._status1_label, "Idle", STATUS_IDLE_COLOR)
 
     # ── Clicker 2 ─────────────────────────────────────────────
 
     def toggle_clicker2(self):
+        old_thread = None
+        should_start = False
         with self.clicker2_lock:
             if self.clicker2_clicking:
                 self._stop_clicker2_locked()
+                old_thread = self.clicker2_thread
             else:
-                self.stop_clicker1()
+                should_start = True
+                old_thread = self.clicker2_thread
+        if old_thread and old_thread.is_alive():
+            old_thread.join(timeout=0.5)
+        if should_start:
+            self.stop_clicker1()
+            with self.clicker2_lock:
                 self._start_clicker2_locked()
 
     def start_clicker2(self):
@@ -1190,16 +1178,22 @@ class AppWindow(QMainWindow):
     def _start_clicker2_locked(self):
         if not self.clicker2_clicking:
             self.clicker2_clicking = True
+            self.clicker2_stop.clear()
             self._set_status(self._status2_label, "Clicking...", STATUS_ACTIVE_COLOR)
+
+            def on_error(e):
+                print(f"Error in clicker 2: {e}")
+                with self.clicker2_lock:
+                    self.clicker2_clicking = False
+                self._set_status(self._status2_label, "Error", STATUS_ERROR_COLOR)
+
             self.clicker2_thread = threading.Thread(
-                target=self._action_loop,
+                target=action_loop,
                 args=(
-                    self.clicker2_lock,
-                    "clicker2_clicking",
-                    "clicker2_interval",
+                    self.clicker2_stop,
+                    lambda: self.clicker2_interval,
                     self.perform_click,
-                    self._status2_label,
-                    "clicker 2",
+                    on_error,
                 ),
                 daemon=True,
             )
@@ -1212,15 +1206,25 @@ class AppWindow(QMainWindow):
     def _stop_clicker2_locked(self):
         if self.clicker2_clicking:
             self.clicker2_clicking = False
+            self.clicker2_stop.set()
             self._set_status(self._status2_label, "Idle", STATUS_IDLE_COLOR)
 
     # ── Key Presser ───────────────────────────────────────────
 
     def toggle_keypresser(self):
+        old_thread = None
+        should_start = False
         with self.keypresser_lock:
             if self.keypresser_pressing:
                 self._stop_keypresser_locked()
+                old_thread = self.keypresser_thread
             else:
+                should_start = True
+                old_thread = self.keypresser_thread
+        if old_thread and old_thread.is_alive():
+            old_thread.join(timeout=0.5)
+        if should_start:
+            with self.keypresser_lock:
                 self._start_keypresser_locked()
 
     def start_keypresser(self):
@@ -1230,17 +1234,22 @@ class AppWindow(QMainWindow):
     def _start_keypresser_locked(self):
         if not self.keypresser_pressing:
             self.keypresser_pressing = True
+            self.keypresser_stop.clear()
             self._set_status(self._kp_status_label, "Pressing...", STATUS_ACTIVE_COLOR)
+
+            def on_error(e):
+                print(f"Error in key presser: {e}")
+                with self.keypresser_lock:
+                    self.keypresser_pressing = False
+                self._set_status(self._kp_status_label, "Error", STATUS_ERROR_COLOR)
+
             self.keypresser_thread = threading.Thread(
-                target=self._action_loop,
+                target=action_loop,
                 args=(
-                    self.keypresser_lock,
-                    "keypresser_pressing",
-                    "keypresser_interval",
-                    self.perform_keypress,
-                    self._kp_status_label,
-                    "key presser",
-                    "keypresser_target_key",
+                    self.keypresser_stop,
+                    lambda: self.keypresser_interval,
+                    lambda: self.perform_keypress(self.keypresser_target_key),
+                    on_error,
                 ),
                 daemon=True,
             )
@@ -1253,6 +1262,7 @@ class AppWindow(QMainWindow):
     def _stop_keypresser_locked(self):
         if self.keypresser_pressing:
             self.keypresser_pressing = False
+            self.keypresser_stop.set()
             self._set_status(self._kp_status_label, "Idle", STATUS_IDLE_COLOR)
 
     # ── Emergency Stop ────────────────────────────────────────
@@ -1272,7 +1282,7 @@ class AppWindow(QMainWindow):
             except Exception:
                 pass
             self.keyboard_listener = None
-        self.keyboard_listener = keyboard.Listener(on_press=self.on_hotkey_press)
+        self.keyboard_listener = keyboard.Listener(on_press=self._on_key_press)
         self.keyboard_listener.start()
 
     def stop_keyboard_listener(self):
@@ -1295,22 +1305,17 @@ class AppWindow(QMainWindow):
     # ══════════════════════════════════════════════════════════════
 
     def _check_for_updates_clicked(self):
-        threading.Thread(
-            target=self._check_for_updates, args=(False,), daemon=True
-        ).start()
+        threading.Thread(target=self._check_for_updates, args=(False,), daemon=True).start()
 
     def _check_for_updates(self, silent=True):
-        import urllib.error
-        import urllib.request
-
         try:
             request = urllib.request.Request(
                 GITHUB_API_LATEST,
-                headers={"User-Agent": f"DualAutoClicker/{__version__}"},
+                headers={"User-Agent": f"{APP_NAME}/{__version__}"},
             )
             with urllib.request.urlopen(request, timeout=10) as response:
-                raw = response.read(1024 * 1024 + 1)
-                if len(raw) > 1024 * 1024:
+                raw = response.read(MAX_API_RESPONSE_SIZE + 1)
+                if len(raw) > MAX_API_RESPONSE_SIZE:
                     raise ValueError("API response too large")
                 data = json.loads(raw.decode())
 
@@ -1365,15 +1370,13 @@ class AppWindow(QMainWindow):
                 daemon=True,
             ).start()
         elif clicked == releases_btn:
-            import webbrowser
-
             webbrowser.open(GITHUB_RELEASES_URL)
 
     @staticmethod
     def _version_newer(latest, current):
         def parse_version(vs):
             if not vs or not isinstance(vs, str):
-                return (0, 0, 0, "", 0)
+                return (0, 0, 0, False, 0)
             vs = vs.lstrip("v")
             if "-" in vs:
                 main_part, pre = vs.split("-", 1)
@@ -1381,8 +1384,9 @@ class AppWindow(QMainWindow):
                 main_part, pre = vs, ""
             parts = []
             for p in main_part.split("."):
-                digits = "".join(c for c in p if c.isdigit())
-                parts.append(int(digits) if digits else 0)
+                if not p.isdigit():
+                    return (0, 0, 0, False, 0)
+                parts.append(int(p))
             while len(parts) < 3:
                 parts.append(0)
             pre_num = 0
@@ -1397,25 +1401,45 @@ class AppWindow(QMainWindow):
             return False
 
     def _compute_git_blob_sha(self, content):
-        import hashlib
-
         header = f"blob {len(content)}\0".encode()
         return hashlib.sha1(header + content).hexdigest()
 
-    def _verify_file_against_github(self, tag_name, filename, content, headers):
+    def _get_expected_sha256(self, release_data, asset_name, headers):
+        """Fetch SHA256SUMS from release and return expected hash for asset_name."""
+        tag_name = release_data.get("tag_name", "")
+        if not hasattr(self, "_sha256sums_cache"):
+            self._sha256sums_cache = {}
+        if tag_name not in self._sha256sums_cache:
+            sha_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/SHA256SUMS"
+            try:
+                req = urllib.request.Request(sha_url, headers=headers)
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    self._sha256sums_cache[tag_name] = response.read().decode("utf-8")
+            except Exception as e:
+                print(f"Warning: Could not fetch SHA256SUMS: {e}")
+                return None
+        sha256sums = self._sha256sums_cache.get(tag_name, "")
+        for line in sha256sums.strip().splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == asset_name:
+                h = parts[0].lower()
+                if re.fullmatch(r"[0-9a-f]{64}", h):
+                    return h
+                return None
+        return None
+
+    def _verify_file_against_github(self, tag_name, filename, content, headers, release_data=None):
         # NOTE: Both payload and SHA come from GitHub over HTTPS. This verifies
         # transport integrity, not authenticity. A MITM on the TLS connection
         # could spoof both. For stronger guarantees, add GPG/minisign signature
         # verification with a pinned public key.
-        import urllib.request
-
-        api_url = (
-            f"https://api.github.com/repos/{GITHUB_REPO}"
-            f"/contents/{filename}?ref={tag_name}"
-        )
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}?ref={tag_name}"
         request = urllib.request.Request(api_url, headers=headers)
         with urllib.request.urlopen(request, timeout=30) as response:
-            file_info = json.loads(response.read().decode())
+            raw = response.read(MAX_METADATA_RESPONSE_SIZE + 1)
+            if len(raw) > MAX_METADATA_RESPONSE_SIZE:
+                raise ValueError("API response too large")
+            file_info = json.loads(raw.decode())
         expected_sha = file_info.get("sha", "")
         actual_sha = self._compute_git_blob_sha(content)
         if actual_sha != expected_sha:
@@ -1425,11 +1449,27 @@ class AppWindow(QMainWindow):
                 f"Got SHA: {actual_sha[:16]}..."
             )
 
-    def _apply_update(self, release_data):
-        import os as os_module
-        import urllib.error
-        import urllib.request
+        # SHA-256 verification (mandatory if SHA256SUMS available)
+        actual_sha256 = hashlib.sha256(content).hexdigest().lower()
+        if release_data:
+            expected_sha256 = self._get_expected_sha256(release_data, filename, headers)
+            if expected_sha256:
+                if actual_sha256 != expected_sha256:
+                    raise RuntimeError(
+                        f"SHA-256 verification failed for {filename}!\n"
+                        f"Expected: {expected_sha256[:16]}...\n"
+                        f"Got: {actual_sha256[:16]}..."
+                    )
+                print(
+                    f"Integrity verified for {filename}: sha256={actual_sha256[:16]}... (enforced)"
+                )
+                return
+        print(
+            f"Integrity verified for {filename}: "
+            f"git-sha1={actual_sha[:16]}... sha256={actual_sha256[:16]}..."
+        )
 
+    def _apply_update(self, release_data):
         tmp_path = None
         progress_state: dict = {"dlg": None, "lbl": None, "bar": None}
 
@@ -1447,6 +1487,8 @@ class AppWindow(QMainWindow):
             dlg.closeEvent = lambda e: e.ignore()
             progress_state.update(dlg=dlg, lbl=lbl, bar=bar)
             dlg.show()
+            # Safety timeout: auto-close if download hangs
+            QTimer.singleShot(120_000, _close_progress)
 
         def _update_progress(pct, mb, total_mb):
             if progress_state["lbl"]:
@@ -1472,24 +1514,23 @@ class AppWindow(QMainWindow):
                 raise ValueError(f"Invalid tag format: {tag_name}")
 
             if getattr(sys, "frozen", False):
-                self._safe_after(
-                    0,
-                    lambda: (
-                        _close_progress(),
-                        QMessageBox.information(
-                            self,
-                            "Update Available",
-                            f"A new version ({tag_name}) is available.\n\n"
-                            "Frozen binaries cannot self-update.\n"
-                            "Please download the latest release from GitHub.",
-                        ),
-                        QDesktopServices.openUrl(QUrl(GITHUB_RELEASES_URL)),
-                    ),
-                )
+
+                def _frozen_notice():
+                    _close_progress()
+                    QMessageBox.information(
+                        self,
+                        "Update Available",
+                        f"A new version ({tag_name}) is available.\n\n"
+                        "Frozen binaries cannot self-update.\n"
+                        "Please download the latest release from GitHub.",
+                    )
+                    QDesktopServices.openUrl(QUrl(GITHUB_RELEASES_URL))
+
+                self._safe_after(0, _frozen_notice)
                 return
 
             download_url = f"{GITHUB_RAW_URL}/{tag_name}/autoclicker.py"
-            headers = {"User-Agent": f"DualAutoClicker/{__version__}"}
+            headers = {"User-Agent": f"{APP_NAME}/{__version__}"}
 
             request = urllib.request.Request(download_url, headers=headers)
             with urllib.request.urlopen(request, timeout=60) as response:
@@ -1499,6 +1540,7 @@ class AppWindow(QMainWindow):
                     try:
                         total_bytes = int(content_length)
                         if total_bytes > MAX_DOWNLOAD_SIZE:
+                            self._safe_after(0, _close_progress)
                             self._safe_after(
                                 0,
                                 lambda: QMessageBox.critical(
@@ -1523,6 +1565,7 @@ class AppWindow(QMainWindow):
                     chunks.append(chunk)
                     downloaded += len(chunk)
                     if downloaded > MAX_DOWNLOAD_SIZE:
+                        self._safe_after(0, _close_progress)
                         self._safe_after(
                             0,
                             lambda: QMessageBox.critical(
@@ -1544,27 +1587,36 @@ class AppWindow(QMainWindow):
 
             # Verify integrity via git blob SHA
             self._verify_file_against_github(
-                tag_name, "autoclicker.py", content, headers
+                tag_name,
+                "autoclicker.py",
+                content,
+                headers,
+                release_data=release_data,
             )
 
             current_script = Path(__file__).resolve()
             script_dir = current_script.parent
             backup_path = current_script.with_suffix(".py.backup")
-            tmp_path = script_dir / f".autoclicker_update_{os_module.getpid()}.tmp"
+            fd, tmp_str = tempfile.mkstemp(
+                dir=str(script_dir),
+                prefix=".autoclicker_update_",
+                suffix=".tmp",
+            )
+            tmp_path = Path(tmp_str)
 
             # Write verified content to temp file
             try:
-                with open(tmp_path, "wb") as f:
+                with os.fdopen(fd, "wb") as f:
                     f.write(content)
                     f.flush()
-                    os_module.fsync(f.fileno())
+                    os.fsync(f.fileno())
             except (IOError, OSError) as e:
                 self._safe_after(
                     0,
                     lambda _e=e: QMessageBox.critical(
                         self,
                         "Update Failed",
-                        f"Failed to write update file:\n{_e}",
+                        "Failed to write update file.\nCheck disk space and permissions.",
                     ),
                 )
                 return
@@ -1578,7 +1630,7 @@ class AppWindow(QMainWindow):
                     lambda _e=e: QMessageBox.critical(
                         self,
                         "Update Failed",
-                        f"Failed to create backup:\n{_e}",
+                        "Failed to create backup.\nCheck disk space and permissions.",
                     ),
                 )
                 return
@@ -1590,24 +1642,24 @@ class AppWindow(QMainWindow):
                     try:
                         if old_path.exists():
                             old_path.unlink()
-                        os_module.rename(str(current_script), str(old_path))
+                        os.rename(str(current_script), str(old_path))
                     except OSError as e:
                         self._safe_after(
                             0,
                             lambda _e=e: QMessageBox.critical(
                                 self,
                                 "Update Failed",
-                                f"Failed to rename current script:\n{_e}\n\n"
-                                f"Backup at: {backup_path}",
+                                "Failed to rename current script.\n\n"
+                                "A backup was created in the app directory.",
                             ),
                         )
                         return
                     try:
-                        os_module.rename(str(tmp_path), str(current_script))
+                        os.rename(str(tmp_path), str(current_script))
                         tmp_path = None
                     except OSError as e:
                         try:
-                            os_module.rename(str(old_path), str(current_script))
+                            os.rename(str(old_path), str(current_script))
                         except OSError:
                             pass
                         self._safe_after(
@@ -1615,13 +1667,13 @@ class AppWindow(QMainWindow):
                             lambda _e=e: QMessageBox.critical(
                                 self,
                                 "Update Failed",
-                                f"Failed to move update:\n{_e}\n\n"
-                                f"Backup at: {backup_path}",
+                                "Failed to move update file.\n\n"
+                                "A backup was created in the app directory.",
                             ),
                         )
                         return
                 else:
-                    os_module.replace(str(tmp_path), str(current_script))
+                    os.replace(str(tmp_path), str(current_script))
                     tmp_path = None
             except (IOError, OSError) as e:
                 self._safe_after(
@@ -1629,7 +1681,7 @@ class AppWindow(QMainWindow):
                     lambda _e=e: QMessageBox.critical(
                         self,
                         "Update Failed",
-                        f"Failed to apply update:\n{_e}\n\nBackup at: {backup_path}",
+                        "Failed to apply update.\n\nA backup was created in the app directory.",
                     ),
                 )
                 return
@@ -1655,7 +1707,6 @@ class AppWindow(QMainWindow):
             self._safe_after(0, _on_complete)
 
         except Exception as e:
-            self._safe_after(0, _close_progress)
             self._safe_after(
                 0,
                 lambda _e=e: QMessageBox.critical(
@@ -1670,10 +1721,7 @@ class AppWindow(QMainWindow):
                 try:
                     Path(tmp_path).unlink()
                 except OSError as cleanup_error:
-                    print(
-                        f"Warning: Failed to clean up temp file "
-                        f"{tmp_path}: {cleanup_error}"
-                    )
+                    print(f"Warning: Failed to clean up temp file {tmp_path}: {cleanup_error}")
 
     # ── Window close ──────────────────────────────────────────
 
@@ -1682,11 +1730,6 @@ class AppWindow(QMainWindow):
         self.stop_clicker2()
         self.stop_keypresser()
         self.stop_keyboard_listener()
-        if self.hotkey_capture_listener:
-            try:
-                self.hotkey_capture_listener.stop()
-            except Exception:
-                pass
         for name, thread in [
             ("Clicker 1", self.clicker1_thread),
             ("Clicker 2", self.clicker2_thread),

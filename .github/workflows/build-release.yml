@@ -102,11 +102,16 @@ jobs:
           dist/linux/Autoclicker-Linux
           dist/windows/Autoclicker.exe
 
+    - name: Generate SHA256SUMS
+      run: |
+        sha256sum dist/linux/Autoclicker-Linux dist/windows/Autoclicker.exe autoclicker.py > SHA256SUMS
+
     - name: Create Release
       run: |
         gh release create "${{ github.ref_name }}" \
           dist/linux/Autoclicker-Linux \
           dist/windows/Autoclicker.exe \
+          SHA256SUMS \
           --title "${{ github.ref_name }}" \
           --generate-notes \
           --notes "$(cat <<'NOTES'

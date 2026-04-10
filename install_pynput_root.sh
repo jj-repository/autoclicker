@@ -2,5 +2,5 @@
 set -euo pipefail
 echo "Installing pynput for root user in dedicated venv..."
 sudo python3 -m venv /opt/autoclicker-venv
-sudo /opt/autoclicker-venv/bin/pip install pynput
+sudo /opt/autoclicker-venv/bin/pip install 'pynput~=1.8.1'
 echo "Done! Run with: sudo /opt/autoclicker-venv/bin/python autoclicker.py"

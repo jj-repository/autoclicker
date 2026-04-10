@@ -24,16 +24,16 @@ rm -rf build dist *.spec
 
 # Build evdev version (recommended - includes keyboard presser)
 echo "Building autoclicker-evdev (recommended version)..."
-pyinstaller --onefile --name autoclicker-evdev --hidden-import autoclicker_core --add-data "icon.png:." --add-data "takodachi.png:." autoclicker_evdev.py
+pyinstaller --onefile --name Autoclicker-Linux --hidden-import autoclicker_core --add-data "icon.png:." --add-data "takodachi.png:." autoclicker_evdev.py
 
 # Build basic version
 echo "Building autoclicker-basic..."
-pyinstaller --onefile --name autoclicker-basic --hidden-import autoclicker_core --add-data "icon.png:." --add-data "takodachi.png:." autoclicker.py
+pyinstaller --onefile --name Autoclicker-Basic --hidden-import autoclicker_core --add-data "icon.png:." --add-data "takodachi.png:." autoclicker.py
 
 echo ""
 echo "Build complete! Executables are in the dist/ directory:"
-echo "  - autoclicker-evdev (recommended - includes keyboard presser)"
-echo "  - autoclicker-basic (mouse only)"
+echo "  - Autoclicker-Linux (recommended - includes keyboard presser)"
+echo "  - Autoclicker-Basic (mouse only)"
 echo ""
 echo "Note: The evdev version requires sudo privileges to run:"
-echo "  sudo ./dist/autoclicker-evdev"
+echo "  sudo ./dist/Autoclicker-Linux"
