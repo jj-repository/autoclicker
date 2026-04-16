@@ -436,7 +436,7 @@ class AppWindow(QMainWindow):
         self.hotkey_cooldown = 0.2
 
         # Update settings
-        self.auto_check_updates = True
+        self.auto_check_updates = False
 
         # Load saved config (populates state from disk before building UI)
         self._load_config()
@@ -1044,11 +1044,16 @@ class AppWindow(QMainWindow):
         self._update_mouse_button_ui(clicker)
         self._save_config()
 
+    _MB_ACTIVE = "background-color: #4ec9b0; color: #1e1e1e; font-weight: bold;"
+    _MB_INACTIVE = ""
+
     def _update_mouse_button_ui(self, clicker: str):
         btns = self._c1_mouse_btns if clicker == "clicker1" else self._c2_mouse_btns
         current = getattr(self, f"{clicker}_mouse_button")
         for name, btn in btns.items():
-            btn.setChecked(name == current)
+            active = name == current
+            btn.setChecked(active)
+            btn.setStyleSheet(self._MB_ACTIVE if active else self._MB_INACTIVE)
 
     # ══════════════════════════════════════════════════════════════
     #  Interval application
