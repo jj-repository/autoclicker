@@ -240,7 +240,7 @@ class DualAutoClicker:
             # Drop root privileges for config I/O if running via sudo
             orig_euid = None
             sudo_uid = os.environ.get("SUDO_UID")
-            if os.geteuid() == 0 and sudo_uid:
+            if hasattr(os, "geteuid") and os.geteuid() == 0 and sudo_uid:
                 uid = int(sudo_uid)
                 if 1 <= uid <= 65533:
                     orig_euid = 0
