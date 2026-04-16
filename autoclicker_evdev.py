@@ -66,6 +66,7 @@ class DualAutoClicker:
         self.clicker1_hotkey = Key.f6
         self.clicker1_hotkey_display = "F6"
         self.clicker1_interval = DEFAULT_CLICKER1_INTERVAL
+        self.clicker1_mouse_button = "left"
         self.clicker1_clicking = False
         self.clicker1_thread = None
         self.clicker1_stop = threading.Event()
@@ -75,6 +76,7 @@ class DualAutoClicker:
         self.clicker2_hotkey = Key.f7
         self.clicker2_hotkey_display = "F7"
         self.clicker2_interval = DEFAULT_CLICKER2_INTERVAL
+        self.clicker2_mouse_button = "left"
         self.clicker2_clicking = False
         self.clicker2_thread = None
         self.clicker2_stop = threading.Event()
@@ -176,6 +178,14 @@ class DualAutoClicker:
                 DEFAULT_KEYPRESSER_INTERVAL,
             )
 
+            # Load mouse button selection
+            mb1 = config.get("clicker1_mouse_button", "left")
+            if mb1 in self._VALID_MOUSE_BUTTONS:
+                self.clicker1_mouse_button = mb1
+            mb2 = config.get("clicker2_mouse_button", "left")
+            if mb2 in self._VALID_MOUSE_BUTTONS:
+                self.clicker2_mouse_button = mb2
+
             # Load hotkeys
             if "clicker1_hotkey" in config:
                 self.clicker1_hotkey = self._deserialize_key(config["clicker1_hotkey"])
@@ -251,6 +261,8 @@ class DualAutoClicker:
             config = {
                 "clicker1_interval": self.clicker1_interval,
                 "clicker2_interval": self.clicker2_interval,
+                "clicker1_mouse_button": self.clicker1_mouse_button,
+                "clicker2_mouse_button": self.clicker2_mouse_button,
                 "clicker1_hotkey": self._serialize_key(self.clicker1_hotkey),
                 "clicker1_hotkey_display": self.clicker1_hotkey_display,
                 "clicker2_hotkey": self._serialize_key(self.clicker2_hotkey),
@@ -308,7 +320,7 @@ class DualAutoClicker:
 
         # Separator 1 (between clicker 1 and 2)
         separator1 = ttk.Separator(main_frame, orient="vertical")
-        separator1.grid(row=1, column=1, rowspan=6, sticky="ns", padx=20)
+        separator1.grid(row=1, column=1, rowspan=8, sticky="ns", padx=20)
 
         # ----- CLICKER 1 (Mouse Button) -----
         self._setup_clicker1_ui(main_frame, 0, 1)
@@ -318,28 +330,28 @@ class DualAutoClicker:
 
         # Horizontal separator before keyboard presser
         hseparator = ttk.Separator(main_frame, orient="horizontal")
-        hseparator.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(30, 30))
+        hseparator.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(30, 30))
 
         # ----- KEYBOARD KEY PRESSER -----
         # Title
         keypresser_title = ttk.Label(
             main_frame, text="Keyboard Key Presser", font=("Arial", 14, "bold")
         )
-        keypresser_title.grid(row=10, column=0, columnspan=3, pady=(0, 15))
+        keypresser_title.grid(row=12, column=0, columnspan=3, pady=(0, 15))
 
         # Left side (column 0)
-        self._setup_keypresser_left_ui(main_frame, 0, 11)
+        self._setup_keypresser_left_ui(main_frame, 0, 13)
 
         # Separator between left and right
         separator2 = ttk.Separator(main_frame, orient="vertical")
-        separator2.grid(row=11, column=1, rowspan=5, sticky="ns", padx=20)
+        separator2.grid(row=13, column=1, rowspan=5, sticky="ns", padx=20)
 
         # Right side (column 2)
-        self._setup_keypresser_right_ui(main_frame, 2, 11)
+        self._setup_keypresser_right_ui(main_frame, 2, 13)
 
         # Emergency Stop Section
         hseparator2 = ttk.Separator(main_frame, orient="horizontal")
-        hseparator2.grid(row=17, column=0, columnspan=3, sticky="ew", pady=(30, 20))
+        hseparator2.grid(row=19, column=0, columnspan=3, sticky="ew", pady=(30, 20))
 
         emergency_title = ttk.Label(
             main_frame,
@@ -347,10 +359,10 @@ class DualAutoClicker:
             font=("Arial", 12, "bold"),
             foreground="red",
         )
-        emergency_title.grid(row=18, column=0, columnspan=3)
+        emergency_title.grid(row=20, column=0, columnspan=3)
 
         emergency_label = ttk.Label(main_frame, text="Hotkey to stop ALL autoclickers:")
-        emergency_label.grid(row=19, column=0, columnspan=3, pady=(10, 5))
+        emergency_label.grid(row=21, column=0, columnspan=3, pady=(10, 5))
 
         self.emergency_stop_button = ttk.Button(
             main_frame,
@@ -358,7 +370,7 @@ class DualAutoClicker:
             command=lambda: self.start_hotkey_capture("emergency_stop"),
             width=20,
         )
-        self.emergency_stop_button.grid(row=20, column=0, columnspan=3, pady=5)
+        self.emergency_stop_button.grid(row=22, column=0, columnspan=3, pady=5)
 
         # Instructions at bottom
         instructions = ttk.Label(
@@ -368,7 +380,7 @@ class DualAutoClicker:
             justify=tk.CENTER,
             font=("Arial", 9, "italic"),
         )
-        instructions.grid(row=21, column=0, columnspan=3, pady=(30, 0))
+        instructions.grid(row=23, column=0, columnspan=3, pady=(30, 0))
 
     def _setup_clicker1_ui(self, parent, column, start_row):
         """Setup UI for Clicker 1"""
@@ -376,23 +388,40 @@ class DualAutoClicker:
         title = ttk.Label(parent, text="Clicker 1", font=("Arial", 14, "bold"))
         title.grid(row=start_row, column=column, pady=(0, 15))
 
+        # Mouse button selector
+        mb_frame = ttk.Frame(parent)
+        mb_frame.grid(row=start_row + 1, column=column, sticky=tk.W, pady=5)
+        ttk.Label(mb_frame, text="Button:").pack(side=tk.LEFT, padx=(0, 5))
+        self._c1_mb_var = tk.StringVar(value=self.clicker1_mouse_button)
+        for label, val in [("L", "left"), ("M", "middle"), ("R", "right")]:
+            rb = ttk.Radiobutton(
+                mb_frame,
+                text=label,
+                variable=self._c1_mb_var,
+                value=val,
+                command=lambda: self._set_mouse_button(
+                    "clicker1", self._c1_mb_var.get()
+                ),
+            )
+            rb.pack(side=tk.LEFT, padx=2)
+
         # Interval
         interval_label = ttk.Label(parent, text="Interval (seconds):")
-        interval_label.grid(row=start_row + 1, column=column, sticky=tk.W, pady=5)
+        interval_label.grid(row=start_row + 2, column=column, sticky=tk.W, pady=5)
 
         self.interval1_var = tk.StringVar(value=str(self.clicker1_interval))
         interval_entry = ttk.Entry(parent, textvariable=self.interval1_var, width=20)
-        interval_entry.grid(row=start_row + 2, column=column, sticky=tk.W, pady=5)
+        interval_entry.grid(row=start_row + 3, column=column, sticky=tk.W, pady=5)
 
         # Apply interval button
         apply_button = ttk.Button(
             parent, text="Apply Interval", command=self.apply_interval1
         )
-        apply_button.grid(row=start_row + 3, column=column, pady=5)
+        apply_button.grid(row=start_row + 4, column=column, pady=5)
 
         # Hotkey
         hotkey_label = ttk.Label(parent, text="Toggle Hotkey:")
-        hotkey_label.grid(row=start_row + 4, column=column, sticky=tk.W, pady=(10, 5))
+        hotkey_label.grid(row=start_row + 5, column=column, sticky=tk.W, pady=(10, 5))
 
         self.hotkey1_button = ttk.Button(
             parent,
@@ -400,7 +429,7 @@ class DualAutoClicker:
             command=lambda: self.start_hotkey_capture("clicker1"),
             width=20,
         )
-        self.hotkey1_button.grid(row=start_row + 5, column=column, sticky=tk.W, pady=5)
+        self.hotkey1_button.grid(row=start_row + 6, column=column, sticky=tk.W, pady=5)
 
         # Status
         self.status1_var = tk.StringVar(value="Idle")
@@ -410,7 +439,7 @@ class DualAutoClicker:
             font=("Arial", 10, "bold"),
             fg="green",
         )
-        self.status1_label.grid(row=start_row + 6, column=column, pady=(10, 5))
+        self.status1_label.grid(row=start_row + 7, column=column, pady=(10, 5))
 
     def _setup_clicker2_ui(self, parent, column, start_row):
         """Setup UI for Clicker 2"""
@@ -418,23 +447,40 @@ class DualAutoClicker:
         title = ttk.Label(parent, text="Clicker 2", font=("Arial", 14, "bold"))
         title.grid(row=start_row, column=column, pady=(0, 15))
 
+        # Mouse button selector
+        mb_frame = ttk.Frame(parent)
+        mb_frame.grid(row=start_row + 1, column=column, sticky=tk.W, pady=5)
+        ttk.Label(mb_frame, text="Button:").pack(side=tk.LEFT, padx=(0, 5))
+        self._c2_mb_var = tk.StringVar(value=self.clicker2_mouse_button)
+        for label, val in [("L", "left"), ("M", "middle"), ("R", "right")]:
+            rb = ttk.Radiobutton(
+                mb_frame,
+                text=label,
+                variable=self._c2_mb_var,
+                value=val,
+                command=lambda: self._set_mouse_button(
+                    "clicker2", self._c2_mb_var.get()
+                ),
+            )
+            rb.pack(side=tk.LEFT, padx=2)
+
         # Interval
         interval_label = ttk.Label(parent, text="Interval (seconds):")
-        interval_label.grid(row=start_row + 1, column=column, sticky=tk.W, pady=5)
+        interval_label.grid(row=start_row + 2, column=column, sticky=tk.W, pady=5)
 
         self.interval2_var = tk.StringVar(value=str(self.clicker2_interval))
         interval_entry = ttk.Entry(parent, textvariable=self.interval2_var, width=20)
-        interval_entry.grid(row=start_row + 2, column=column, sticky=tk.W, pady=5)
+        interval_entry.grid(row=start_row + 3, column=column, sticky=tk.W, pady=5)
 
         # Apply interval button
         apply_button = ttk.Button(
             parent, text="Apply Interval", command=self.apply_interval2
         )
-        apply_button.grid(row=start_row + 3, column=column, pady=5)
+        apply_button.grid(row=start_row + 4, column=column, pady=5)
 
         # Hotkey
         hotkey_label = ttk.Label(parent, text="Toggle Hotkey:")
-        hotkey_label.grid(row=start_row + 4, column=column, sticky=tk.W, pady=(10, 5))
+        hotkey_label.grid(row=start_row + 5, column=column, sticky=tk.W, pady=(10, 5))
 
         self.hotkey2_button = ttk.Button(
             parent,
@@ -442,7 +488,7 @@ class DualAutoClicker:
             command=lambda: self.start_hotkey_capture("clicker2"),
             width=20,
         )
-        self.hotkey2_button.grid(row=start_row + 5, column=column, sticky=tk.W, pady=5)
+        self.hotkey2_button.grid(row=start_row + 6, column=column, sticky=tk.W, pady=5)
 
         # Status
         self.status2_var = tk.StringVar(value="Idle")
@@ -452,7 +498,7 @@ class DualAutoClicker:
             font=("Arial", 10, "bold"),
             fg="green",
         )
-        self.status2_label.grid(row=start_row + 6, column=column, pady=(10, 5))
+        self.status2_label.grid(row=start_row + 7, column=column, pady=(10, 5))
 
     def _setup_keypresser_left_ui(self, parent, column, start_row):
         """Setup left side of Keyboard Key Presser UI"""
@@ -710,14 +756,28 @@ class DualAutoClicker:
                 print("You may need to run with: sudo python3 autoclicker_evdev.py")
                 raise
 
-    def perform_click(self):
-        """Perform a single left mouse click using evdev"""
+    _EVDEV_MOUSE_BUTTONS = {
+        "left": e.BTN_LEFT,
+        "middle": e.BTN_MIDDLE,
+        "right": e.BTN_RIGHT,
+    }
+    _VALID_MOUSE_BUTTONS = {"left", "middle", "right"}
+
+    def _set_mouse_button(self, clicker, button):
+        if button not in self._VALID_MOUSE_BUTTONS:
+            return
+        setattr(self, f"{clicker}_mouse_button", button)
+        self.save_config()
+
+    def perform_click(self, button_name="left"):
+        """Perform a single mouse click using evdev"""
         if self.virtual_mouse is None:
             self.init_virtual_mouse()
 
-        self.virtual_mouse.write(e.EV_KEY, e.BTN_LEFT, 1)
+        btn = self._EVDEV_MOUSE_BUTTONS.get(button_name, e.BTN_LEFT)
+        self.virtual_mouse.write(e.EV_KEY, btn, 1)
         self.virtual_mouse.syn()
-        self.virtual_mouse.write(e.EV_KEY, e.BTN_LEFT, 0)
+        self.virtual_mouse.write(e.EV_KEY, btn, 0)
         self.virtual_mouse.syn()
 
     def init_virtual_keyboard(self):
@@ -811,7 +871,7 @@ class DualAutoClicker:
                 args=(
                     self.clicker1_stop,
                     lambda: self.clicker1_interval,
-                    self.perform_click,
+                    lambda: self.perform_click(self.clicker1_mouse_button),
                     on_error,
                 ),
                 daemon=True,
@@ -871,7 +931,7 @@ class DualAutoClicker:
                 args=(
                     self.clicker2_stop,
                     lambda: self.clicker2_interval,
-                    self.perform_click,
+                    lambda: self.perform_click(self.clicker2_mouse_button),
                     on_error,
                 ),
                 daemon=True,

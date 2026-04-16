@@ -542,6 +542,8 @@ class TestConfigPersistence(unittest.TestCase):
         obj.clicker1_interval = 0.15
         obj.clicker2_interval = 0.55
         obj.keypresser_interval = 0.25
+        obj.clicker1_mouse_button = "left"
+        obj.clicker2_mouse_button = "left"
         obj.clicker1_hotkey = mock_key.f6
         obj.clicker1_hotkey_display = "F6"
         obj.clicker2_hotkey = mock_key.f7
@@ -706,6 +708,8 @@ class TestThreadSafety(unittest.TestCase):
         obj.clicker1_interval = 0.1
         obj.clicker2_interval = 0.5
         obj.keypresser_interval = 0.1
+        obj.clicker1_mouse_button = "left"
+        obj.clicker2_mouse_button = "left"
         obj.clicker1_thread = None
         obj.clicker2_thread = None
         obj.keypresser_thread = None
@@ -932,6 +936,8 @@ class TestConfigPersistencePyQt(unittest.TestCase):
         # Minimal state for config save/load
         obj.clicker1_interval = 0.2
         obj.clicker2_interval = 0.6
+        obj.clicker1_mouse_button = "left"
+        obj.clicker2_mouse_button = "left"
         obj.clicker1_hotkey = mock_key.f6
         obj.clicker1_hotkey_display = "F6"
         obj.clicker2_hotkey = mock_key.f7
@@ -1098,6 +1104,8 @@ class TestThreadSafetyPyQt(unittest.TestCase):
         obj.clicker1_interval = 0.1
         obj.clicker2_interval = 0.5
         obj.keypresser_interval = 0.1
+        obj.clicker1_mouse_button = "left"
+        obj.clicker2_mouse_button = "left"
         obj.clicker1_thread = None
         obj.clicker2_thread = None
         obj.keypresser_thread = None
@@ -1240,6 +1248,8 @@ class TestConfigRoundtripHotkeysEvdev(unittest.TestCase):
         obj.clicker1_interval = 0.15
         obj.clicker2_interval = 0.55
         obj.keypresser_interval = 0.25
+        obj.clicker1_mouse_button = "left"
+        obj.clicker2_mouse_button = "left"
         obj.clicker1_hotkey = mock_key.f6
         obj.clicker1_hotkey_display = "F6"
         obj.clicker2_hotkey = mock_key.f7
@@ -1358,7 +1368,6 @@ class TestPerformActionsEvdev(unittest.TestCase):
     """Test evdev perform_click / perform_keypress call sequences."""
 
     def test_perform_click_sequence(self):
-
         obj = _make_evdev_obj()
         obj.virtual_mouse = MagicMock()
         obj.perform_click()
@@ -1703,6 +1712,8 @@ class TestThreadJoinVerification(unittest.TestCase):
         obj.clicker1_interval = 0.01
         obj.clicker2_interval = 0.01
         obj.keypresser_interval = 0.01
+        obj.clicker1_mouse_button = "left"
+        obj.clicker2_mouse_button = "left"
         obj.clicker1_thread = None
         obj.clicker2_thread = None
         obj.keypresser_thread = None
@@ -1757,6 +1768,8 @@ class TestConfigTargetKeyRoundtripPyQt(unittest.TestCase):
             obj = object.__new__(AppWindow)
             obj.clicker1_interval = 0.1
             obj.clicker2_interval = 0.5
+            obj.clicker1_mouse_button = "left"
+            obj.clicker2_mouse_button = "left"
             obj.clicker1_hotkey = mock_key.f6
             obj.clicker1_hotkey_display = "F6"
             obj.clicker2_hotkey = mock_key.f7
@@ -1781,6 +1794,8 @@ class TestConfigTargetKeyRoundtripPyQt(unittest.TestCase):
             obj2 = object.__new__(AppWindow)
             obj2.clicker1_interval = 0.1
             obj2.clicker2_interval = 0.5
+            obj2.clicker1_mouse_button = "left"
+            obj2.clicker2_mouse_button = "left"
             obj2.clicker1_hotkey = mock_key.f6
             obj2.clicker1_hotkey_display = "F6"
             obj2.clicker2_hotkey = mock_key.f7

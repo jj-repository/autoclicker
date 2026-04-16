@@ -76,7 +76,7 @@ from autoclicker_core import (
 
 # ── App identity ──────────────────────────────────────────────────────
 APP_NAME = "AutoClicker"
-__version__ = "1.12"
+__version__ = "1.13"
 WINDOW_SIZE = (560, 820)
 
 # ── Color palette ─────────────────────────────────────────────────────
@@ -393,6 +393,7 @@ class AppWindow(QMainWindow):
         self.clicker1_hotkey = Key.f6
         self.clicker1_hotkey_display = "F6"
         self.clicker1_interval = DEFAULT_CLICKER1_INTERVAL
+        self.clicker1_mouse_button = "left"
         self.clicker1_clicking = False
         self.clicker1_thread = None
         self.clicker1_stop = threading.Event()
@@ -401,6 +402,7 @@ class AppWindow(QMainWindow):
         self.clicker2_hotkey = Key.f7
         self.clicker2_hotkey_display = "F7"
         self.clicker2_interval = DEFAULT_CLICKER2_INTERVAL
+        self.clicker2_mouse_button = "left"
         self.clicker2_clicking = False
         self.clicker2_thread = None
         self.clicker2_stop = threading.Event()
@@ -482,7 +484,9 @@ class AppWindow(QMainWindow):
             if delay_ms <= 0:
                 self._ui_updater.requested.emit(callback)
             else:
-                self._ui_updater.requested.emit(lambda: QTimer.singleShot(delay_ms, callback))
+                self._ui_updater.requested.emit(
+                    lambda: QTimer.singleShot(delay_ms, callback)
+                )
         except RuntimeError:
             pass
 
@@ -509,6 +513,35 @@ class AppWindow(QMainWindow):
 
         c1_group = QGroupBox("Clicker 1")
         c1 = QVBoxLayout()
+        c1.addWidget(QLabel("Mouse Button:"))
+        c1_btn_row = QHBoxLayout()
+        self._c1_btn_L = QPushButton("L")
+        self._c1_btn_M = QPushButton("M")
+        self._c1_btn_R = QPushButton("R")
+        for btn in (self._c1_btn_L, self._c1_btn_M, self._c1_btn_R):
+            btn.setFixedSize(36, 28)
+            btn.setCheckable(True)
+        self._c1_btn_L.clicked.connect(
+            lambda: self._set_mouse_button("clicker1", "left")
+        )
+        self._c1_btn_M.clicked.connect(
+            lambda: self._set_mouse_button("clicker1", "middle")
+        )
+        self._c1_btn_R.clicked.connect(
+            lambda: self._set_mouse_button("clicker1", "right")
+        )
+        self._c1_mouse_btns = {
+            "left": self._c1_btn_L,
+            "middle": self._c1_btn_M,
+            "right": self._c1_btn_R,
+        }
+        self._update_mouse_button_ui("clicker1")
+        c1_btn_row.addWidget(self._c1_btn_L)
+        c1_btn_row.addWidget(self._c1_btn_M)
+        c1_btn_row.addWidget(self._c1_btn_R)
+        c1_btn_row.addStretch()
+        c1.addLayout(c1_btn_row)
+        c1.addSpacing(4)
         c1.addWidget(QLabel("Interval (seconds):"))
         c1_int = QHBoxLayout()
         self._interval1_edit = QLineEdit(str(self.clicker1_interval))
@@ -535,6 +568,35 @@ class AppWindow(QMainWindow):
 
         c2_group = QGroupBox("Clicker 2")
         c2 = QVBoxLayout()
+        c2.addWidget(QLabel("Mouse Button:"))
+        c2_btn_row = QHBoxLayout()
+        self._c2_btn_L = QPushButton("L")
+        self._c2_btn_M = QPushButton("M")
+        self._c2_btn_R = QPushButton("R")
+        for btn in (self._c2_btn_L, self._c2_btn_M, self._c2_btn_R):
+            btn.setFixedSize(36, 28)
+            btn.setCheckable(True)
+        self._c2_btn_L.clicked.connect(
+            lambda: self._set_mouse_button("clicker2", "left")
+        )
+        self._c2_btn_M.clicked.connect(
+            lambda: self._set_mouse_button("clicker2", "middle")
+        )
+        self._c2_btn_R.clicked.connect(
+            lambda: self._set_mouse_button("clicker2", "right")
+        )
+        self._c2_mouse_btns = {
+            "left": self._c2_btn_L,
+            "middle": self._c2_btn_M,
+            "right": self._c2_btn_R,
+        }
+        self._update_mouse_button_ui("clicker2")
+        c2_btn_row.addWidget(self._c2_btn_L)
+        c2_btn_row.addWidget(self._c2_btn_M)
+        c2_btn_row.addWidget(self._c2_btn_R)
+        c2_btn_row.addStretch()
+        c2.addLayout(c2_btn_row)
+        c2.addSpacing(4)
         c2.addWidget(QLabel("Interval (seconds):"))
         c2_int = QHBoxLayout()
         self._interval2_edit = QLineEdit(str(self.clicker2_interval))
@@ -569,7 +631,9 @@ class AppWindow(QMainWindow):
         )
         emerg = QHBoxLayout()
         emerg.addWidget(QLabel("Hotkey:"))
-        self._emergency_stop_btn = QPushButton(f"Current: {self.emergency_stop_hotkey_display}")
+        self._emergency_stop_btn = QPushButton(
+            f"Current: {self.emergency_stop_hotkey_display}"
+        )
         self._emergency_stop_btn.clicked.connect(
             lambda: self.start_hotkey_capture("emergency_stop")
         )
@@ -584,7 +648,9 @@ class AppWindow(QMainWindow):
 
         kp_left = QVBoxLayout()
         kp_left.addWidget(QLabel("Key to Press:"))
-        self._kp_target_btn = QPushButton(f"Current: {self.keypresser_target_key_display}")
+        self._kp_target_btn = QPushButton(
+            f"Current: {self.keypresser_target_key_display}"
+        )
         self._kp_target_btn.clicked.connect(self._select_target_key)
         kp_left.addWidget(self._kp_target_btn)
         kp_left.addSpacing(8)
@@ -604,7 +670,9 @@ class AppWindow(QMainWindow):
         kp_right = QVBoxLayout()
         kp_right.addWidget(QLabel("Toggle Hotkey:"))
         self._kp_hotkey_btn = QPushButton(f"Current: {self.keypresser_hotkey_display}")
-        self._kp_hotkey_btn.clicked.connect(lambda: self.start_hotkey_capture("keypresser"))
+        self._kp_hotkey_btn.clicked.connect(
+            lambda: self.start_hotkey_capture("keypresser")
+        )
         kp_right.addWidget(self._kp_hotkey_btn)
         kp_right.addSpacing(8)
         kp_right.addWidget(QLabel("Status:"))
@@ -708,14 +776,18 @@ class AppWindow(QMainWindow):
         readme_btn = _colored_btn("Readme", BLUE)
         readme_btn.setToolTip("Open documentation on GitHub")
         readme_btn.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl(f"https://github.com/{GITHUB_REPO}#readme"))
+            lambda: QDesktopServices.openUrl(
+                QUrl(f"https://github.com/{GITHUB_REPO}#readme")
+            )
         )
         btns.addWidget(readme_btn)
 
         report_btn = _colored_btn("Report Bug", YELLOW, text_color="#1e1e1e")
         report_btn.setToolTip("Report an issue on GitHub")
         report_btn.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl(f"https://github.com/{GITHUB_REPO}/issues/new"))
+            lambda: QDesktopServices.openUrl(
+                QUrl(f"https://github.com/{GITHUB_REPO}/issues/new")
+            )
         )
         btns.addWidget(report_btn)
 
@@ -739,8 +811,9 @@ class AppWindow(QMainWindow):
             ),
             (
                 "Mouse Clickers",
-                "Clicker 1 and Clicker 2 click the left mouse button at the "
-                "configured interval. Starting one automatically stops the other. "
+                "Clicker 1 and Clicker 2 click at the configured interval. "
+                "Use the L / M / R buttons to select left, middle, or right "
+                "mouse button. Starting one automatically stops the other. "
                 "Set the interval in seconds and click Apply, or change the "
                 "toggle hotkey.",
             ),
@@ -831,6 +904,13 @@ class AppWindow(QMainWindow):
             config.get("clicker2_interval"), DEFAULT_CLICKER2_INTERVAL
         )
 
+        mb1 = config.get("clicker1_mouse_button", "left")
+        if mb1 in self._VALID_MOUSE_BUTTONS:
+            self.clicker1_mouse_button = mb1
+        mb2 = config.get("clicker2_mouse_button", "left")
+        if mb2 in self._VALID_MOUSE_BUTTONS:
+            self.clicker2_mouse_button = mb2
+
         if "clicker1_hotkey" in config:
             self.clicker1_hotkey = self._deserialize_key(config["clicker1_hotkey"])
             d = config.get("clicker1_hotkey_display", "F6")
@@ -845,7 +925,9 @@ class AppWindow(QMainWindow):
         )
         if "keypresser_hotkey" in config:
             self.keypresser_hotkey = self._deserialize_key(config["keypresser_hotkey"])
-            self.keypresser_hotkey_display = config.get("keypresser_hotkey_display", "F8")
+            self.keypresser_hotkey_display = config.get(
+                "keypresser_hotkey_display", "F8"
+            )
         if "keypresser_target_key_pynput" in config:
             self.keypresser_target_key = self._deserialize_key(
                 config["keypresser_target_key_pynput"]
@@ -855,8 +937,12 @@ class AppWindow(QMainWindow):
             )
 
         if "emergency_stop_hotkey" in config:
-            self.emergency_stop_hotkey = self._deserialize_key(config["emergency_stop_hotkey"])
-            self.emergency_stop_hotkey_display = config.get("emergency_stop_hotkey_display", "F9")
+            self.emergency_stop_hotkey = self._deserialize_key(
+                config["emergency_stop_hotkey"]
+            )
+            self.emergency_stop_hotkey_display = config.get(
+                "emergency_stop_hotkey_display", "F9"
+            )
 
         if "auto_check_updates" in config:
             self.auto_check_updates = bool(config.get("auto_check_updates", True))
@@ -909,6 +995,8 @@ class AppWindow(QMainWindow):
             config = {
                 "clicker1_interval": self.clicker1_interval,
                 "clicker2_interval": self.clicker2_interval,
+                "clicker1_mouse_button": self.clicker1_mouse_button,
+                "clicker2_mouse_button": self.clicker2_mouse_button,
                 "clicker1_hotkey": self._serialize_key(self.clicker1_hotkey),
                 "clicker1_hotkey_display": self.clicker1_hotkey_display,
                 "clicker2_hotkey": self._serialize_key(self.clicker2_hotkey),
@@ -916,9 +1004,13 @@ class AppWindow(QMainWindow):
                 "keypresser_interval": self.keypresser_interval,
                 "keypresser_hotkey": self._serialize_key(self.keypresser_hotkey),
                 "keypresser_hotkey_display": self.keypresser_hotkey_display,
-                "keypresser_target_key_pynput": self._serialize_key(self.keypresser_target_key),
+                "keypresser_target_key_pynput": self._serialize_key(
+                    self.keypresser_target_key
+                ),
                 "keypresser_target_key_display": self.keypresser_target_key_display,
-                "emergency_stop_hotkey": self._serialize_key(self.emergency_stop_hotkey),
+                "emergency_stop_hotkey": self._serialize_key(
+                    self.emergency_stop_hotkey
+                ),
                 "emergency_stop_hotkey_display": self.emergency_stop_hotkey_display,
                 "auto_check_updates": self.auto_check_updates,
                 "window_geometry": {
@@ -938,6 +1030,25 @@ class AppWindow(QMainWindow):
     _serialize_key = staticmethod(serialize_key)
     _deserialize_key = staticmethod(deserialize_key)
     _validate_interval = staticmethod(validate_interval)
+
+    # ══════════════════════════════════════════════════════════════
+    #  Mouse button selection
+    # ══════════════════════════════════════════════════════════════
+
+    _VALID_MOUSE_BUTTONS = {"left", "middle", "right"}
+
+    def _set_mouse_button(self, clicker: str, button: str):
+        if button not in self._VALID_MOUSE_BUTTONS:
+            return
+        setattr(self, f"{clicker}_mouse_button", button)
+        self._update_mouse_button_ui(clicker)
+        self._save_config()
+
+    def _update_mouse_button_ui(self, clicker: str):
+        btns = self._c1_mouse_btns if clicker == "clicker1" else self._c2_mouse_btns
+        current = getattr(self, f"{clicker}_mouse_button")
+        for name, btn in btns.items():
+            btn.setChecked(name == current)
 
     # ══════════════════════════════════════════════════════════════
     #  Interval application
@@ -964,7 +1075,9 @@ class AppWindow(QMainWindow):
             else:
                 setattr(self, target_attr, val)
             self._save_config()
-            QMessageBox.information(self, "Success", f"{name} interval updated to {val}s")
+            QMessageBox.information(
+                self, "Success", f"{name} interval updated to {val}s"
+            )
         except ValueError as e:
             QMessageBox.critical(self, "Error", f"Invalid interval: {e}")
 
@@ -975,7 +1088,9 @@ class AppWindow(QMainWindow):
         self._apply_interval(self._interval2_edit, "clicker2_interval", "Clicker 2")
 
     def _apply_keypresser_interval(self):
-        self._apply_interval(self._kp_interval_edit, "keypresser_interval", "Key Presser")
+        self._apply_interval(
+            self._kp_interval_edit, "keypresser_interval", "Key Presser"
+        )
 
     # ══════════════════════════════════════════════════════════════
     #  Target key selection
@@ -1063,8 +1178,15 @@ class AppWindow(QMainWindow):
     #  Clicking / Key pressing logic
     # ══════════════════════════════════════════════════════════════
 
-    def perform_click(self):
-        self.mouse_controller.click(mouse.Button.left, 1)
+    _MOUSE_BUTTONS = {
+        "left": mouse.Button.left,
+        "middle": mouse.Button.middle,
+        "right": mouse.Button.right,
+    }
+
+    def perform_click(self, button_name="left"):
+        btn = self._MOUSE_BUTTONS.get(button_name, mouse.Button.left)
+        self.mouse_controller.click(btn, 1)
 
     def perform_keypress(self, target_key):
         self.keyboard_controller.press(target_key)
@@ -1135,7 +1257,7 @@ class AppWindow(QMainWindow):
                 args=(
                     self.clicker1_stop,
                     lambda: self.clicker1_interval,
-                    self.perform_click,
+                    lambda: self.perform_click(self.clicker1_mouse_button),
                     on_error,
                 ),
                 daemon=True,
@@ -1192,7 +1314,7 @@ class AppWindow(QMainWindow):
                 args=(
                     self.clicker2_stop,
                     lambda: self.clicker2_interval,
-                    self.perform_click,
+                    lambda: self.perform_click(self.clicker2_mouse_button),
                     on_error,
                 ),
                 daemon=True,
@@ -1305,7 +1427,9 @@ class AppWindow(QMainWindow):
     # ══════════════════════════════════════════════════════════════
 
     def _check_for_updates_clicked(self):
-        threading.Thread(target=self._check_for_updates, args=(False,), daemon=True).start()
+        threading.Thread(
+            target=self._check_for_updates, args=(False,), daemon=True
+        ).start()
 
     def _check_for_updates(self, silent=True):
         try:
@@ -1428,7 +1552,9 @@ class AppWindow(QMainWindow):
                 return None
         return None
 
-    def _verify_file_against_github(self, tag_name, filename, content, headers, release_data=None):
+    def _verify_file_against_github(
+        self, tag_name, filename, content, headers, release_data=None
+    ):
         # NOTE: Both payload and SHA come from GitHub over HTTPS. This verifies
         # transport integrity, not authenticity. A MITM on the TLS connection
         # could spoof both. For stronger guarantees, add GPG/minisign signature
@@ -1721,7 +1847,9 @@ class AppWindow(QMainWindow):
                 try:
                     Path(tmp_path).unlink()
                 except OSError as cleanup_error:
-                    print(f"Warning: Failed to clean up temp file {tmp_path}: {cleanup_error}")
+                    print(
+                        f"Warning: Failed to clean up temp file {tmp_path}: {cleanup_error}"
+                    )
 
     # ── Window close ──────────────────────────────────────────
 
