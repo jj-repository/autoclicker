@@ -38,7 +38,7 @@ A robust, production-ready autoclicker application with dual mouse autoclickers,
 - **Input validation** - enforces min (0.01s) and max (60s) intervals to prevent system overload
 
 ### Auto-Updates
-- **Automatic update checking** on startup (configurable via Help menu)
+- **Automatic update checking** on startup (disabled by default, opt-in via Help menu)
 - **One-click updates** with SHA256 checksum verification for security
 - **Backup creation** before applying updates (`.py.backup`)
 - **Manual update check** available in Help menu

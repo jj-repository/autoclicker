@@ -945,7 +945,7 @@ class AppWindow(QMainWindow):
             )
 
         if "auto_check_updates" in config:
-            self.auto_check_updates = bool(config.get("auto_check_updates", True))
+            self.auto_check_updates = bool(config.get("auto_check_updates", False))
 
         # Restore window geometry (supports old tkinter format + new dict)
         geo = config.get("window_geometry")
