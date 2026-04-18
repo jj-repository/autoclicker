@@ -77,7 +77,7 @@ from autoclicker_core import (
 
 # ── App identity ──────────────────────────────────────────────────────
 APP_NAME = "AutoClicker"
-__version__ = "1.17"
+__version__ = "1.18"
 WINDOW_SIZE = (560, 820)
 
 # ── Color palette ─────────────────────────────────────────────────────
@@ -1915,10 +1915,16 @@ class AppWindow(QMainWindow):
             bar = QProgressBar()
             bar.setRange(0, 100)
             lay.addWidget(bar)
-            dlg.closeEvent = lambda e: e.ignore()
-            progress_state.update(dlg=dlg, lbl=lbl, bar=bar)
+            progress_state.update(dlg=dlg, lbl=lbl, bar=bar, allow_close=False)
+
+            def _close_event(event):
+                if progress_state.get("allow_close"):
+                    event.accept()
+                else:
+                    event.ignore()
+
+            dlg.closeEvent = _close_event
             dlg.show()
-            # Safety timeout: auto-close if download hangs
             QTimer.singleShot(120_000, _close_progress)
 
         def _update_progress(pct, mb, total_mb):
@@ -1931,8 +1937,10 @@ class AppWindow(QMainWindow):
 
         def _close_progress():
             if progress_state["dlg"]:
+                progress_state["allow_close"] = True
                 try:
-                    progress_state["dlg"].close()
+                    progress_state["dlg"].done(0)
+                    progress_state["dlg"].deleteLater()
                 except RuntimeError:
                     pass
                 progress_state["dlg"] = None
