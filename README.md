@@ -39,10 +39,12 @@ A robust, production-ready autoclicker application with dual mouse autoclickers,
 
 ### Auto-Updates
 - **Automatic update checking** on startup (disabled by default, opt-in via Help menu)
-- **One-click updates** with SHA256 checksum verification for security
-- **Backup creation** before applying updates (`.py.backup`)
+- **One-click self-update** on source, Windows `.exe`, and Linux binary
+- **SHA-256 verification** against release `SHA256SUMS` (mandatory — update aborts if missing)
+- **Rename-and-replace** swap: running binary renamed to `.old`, new binary takes its place
+- **Automatic cleanup** of `.old` files and leftover update artifacts on next startup
+- **Windows `.bat` trampoline fallback** for edge cases where the running exe is locked
 - **Manual update check** available in Help menu
-- **GitHub Releases integration** - opens releases page as alternative
 
 ## Installation
 

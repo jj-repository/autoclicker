@@ -20,6 +20,7 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -76,7 +77,7 @@ from autoclicker_core import (
 
 # ── App identity ──────────────────────────────────────────────────────
 APP_NAME = "AutoClicker"
-__version__ = "1.14"
+__version__ = "1.15"
 WINDOW_SIZE = (560, 820)
 
 # ── Color palette ─────────────────────────────────────────────────────
@@ -1600,6 +1601,305 @@ class AppWindow(QMainWindow):
             f"git-sha1={actual_sha[:16]}... sha256={actual_sha256[:16]}..."
         )
 
+    @staticmethod
+    def _sha256_file(filepath) -> str:
+        """Compute SHA-256 of a file using chunked reads."""
+        h = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(256 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest().lower()
+
+    @staticmethod
+    def cleanup_old_updates():
+        """Remove leftover files from previous self-updates (*.old, _update_*.bat)."""
+        try:
+            if getattr(sys, "frozen", False):
+                exe_dir = Path(sys.executable).parent
+                for pattern in ("*.old", "_update_*.bat", "_update_*.sh"):
+                    for stale in exe_dir.glob(pattern):
+                        try:
+                            stale.unlink()
+                            print(f"Cleaned up old update file: {stale}")
+                        except OSError:
+                            pass
+            else:
+                script_path = Path(__file__).resolve()
+                for stale in script_path.parent.glob("autoclicker.py.old"):
+                    try:
+                        stale.unlink()
+                    except OSError:
+                        pass
+                for stale in script_path.parent.glob("autoclicker.py.backup"):
+                    try:
+                        stale.unlink()
+                    except OSError:
+                        pass
+        except Exception as e:
+            print(f"Error cleaning old update files: {e}")
+
+    def _get_update_asset_url(self, release_data):
+        """Find download URL for the right release asset on this platform.
+
+        Validates URL points to our repo to prevent redirect abuse.
+        """
+        if sys.platform == "win32":
+            target = "Autoclicker.exe"
+        else:
+            target = "Autoclicker-Linux"
+
+        for asset in release_data.get("assets", []):
+            if asset.get("name") == target:
+                url = asset.get("browser_download_url", "")
+                if not url.startswith(f"https://github.com/{GITHUB_REPO}/"):
+                    print(f"Rejecting download URL outside our repo: {url}")
+                    return None, target
+                return url, target
+        return None, target
+
+    def _apply_update_frozen(
+        self,
+        release_data,
+        tag_name,
+        _create_progress,
+        _update_progress,
+        _close_progress,
+    ):
+        """Self-update a frozen portable binary via download + rename-and-replace.
+
+        Flow: download new binary → verify SHA-256 → rename running → .old,
+        move new into place → user reopens → .old cleaned up on next launch.
+        """
+        download_url, asset_name = self._get_update_asset_url(release_data)
+        if not download_url:
+            self._safe_after(0, _close_progress)
+            self._safe_after(
+                0,
+                lambda: QMessageBox.critical(
+                    self,
+                    "Update Failed",
+                    f"Could not find {asset_name} in the release.\n"
+                    f"Please download manually from GitHub.",
+                ),
+            )
+            self._safe_after(
+                0, lambda: QDesktopServices.openUrl(QUrl(GITHUB_RELEASES_URL))
+            )
+            return
+
+        headers = {"User-Agent": f"{APP_NAME}/{__version__}"}
+        exe_path = Path(sys.executable).resolve()
+
+        try:
+            if sys.platform == "win32":
+                self._apply_update_frozen_windows(
+                    download_url,
+                    asset_name,
+                    headers,
+                    exe_path,
+                    release_data,
+                    _update_progress,
+                    _close_progress,
+                )
+            else:
+                self._apply_update_frozen_linux(
+                    download_url,
+                    asset_name,
+                    headers,
+                    exe_path,
+                    release_data,
+                    _update_progress,
+                    _close_progress,
+                )
+        except Exception as e:
+            self._safe_after(0, _close_progress)
+            self._safe_after(
+                0,
+                lambda _e=e: QMessageBox.critical(
+                    self,
+                    "Update Failed",
+                    f"Failed to download update:\n{_e}",
+                ),
+            )
+
+    def _download_to_file(
+        self, download_url, headers, dest_path, _update_progress, asset_name
+    ):
+        """Stream download to file, reporting progress via _update_progress."""
+        request = urllib.request.Request(download_url, headers=headers)
+        with urllib.request.urlopen(request, timeout=300) as response:
+            total = int(response.headers.get("Content-Length", 0))
+            downloaded = 0
+            with open(dest_path, "wb") as f:
+                while True:
+                    chunk = response.read(256 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        pct = int(downloaded / total * 100)
+                        mb = downloaded / (1024 * 1024)
+                        tmb = total / (1024 * 1024)
+                        self._safe_after(
+                            0, lambda p=pct, m=mb, t=tmb: _update_progress(p, m, t)
+                        )
+        if downloaded < 1024:
+            Path(dest_path).unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Downloaded {asset_name} is too small — likely corrupted."
+            )
+        return downloaded
+
+    def _verify_sha256_or_abort(self, release_data, asset_name, file_path, headers):
+        """Verify SHA-256 of file_path against SHA256SUMS; delete + raise on failure."""
+        expected = self._get_expected_sha256(release_data, asset_name, headers)
+        if not expected:
+            Path(file_path).unlink(missing_ok=True)
+            raise RuntimeError(
+                "SHA-256 verification unavailable — SHA256SUMS missing from release. "
+                "Update aborted for security."
+            )
+        actual = self._sha256_file(file_path)
+        if actual != expected:
+            Path(file_path).unlink(missing_ok=True)
+            raise RuntimeError(
+                f"SHA-256 verification failed for {asset_name}!\n"
+                f"Expected: {expected[:16]}...\n"
+                f"Got: {actual[:16]}..."
+            )
+        print(f"SHA-256 verification passed for {asset_name}")
+
+    def _apply_update_frozen_windows(
+        self,
+        download_url,
+        asset_name,
+        headers,
+        exe_path,
+        release_data,
+        _update_progress,
+        _close_progress,
+    ):
+        """Windows portable exe update: rename-dance with .bat trampoline fallback."""
+        new_exe = exe_path.with_suffix(".exe.new")
+        old_exe = exe_path.with_name(exe_path.stem + ".old")
+
+        self._download_to_file(
+            download_url, headers, new_exe, _update_progress, asset_name
+        )
+        self._safe_after(0, _close_progress)
+        self._verify_sha256_or_abort(release_data, asset_name, new_exe, headers)
+
+        # Rename dance: running.exe -> .old, .new -> running.exe
+        try:
+            if old_exe.exists():
+                old_exe.unlink()
+            exe_path.rename(old_exe)
+            try:
+                new_exe.rename(exe_path)
+            except Exception:
+                if old_exe.exists() and not exe_path.exists():
+                    old_exe.rename(exe_path)
+                raise
+
+            self._safe_after(
+                0,
+                lambda: QMessageBox.information(
+                    self,
+                    "Update Installed",
+                    "Updated to the latest version.\n\n"
+                    "Please close and reopen the app to use it.",
+                ),
+            )
+        except OSError as rename_err:
+            # Fallback: .bat trampoline moves file after we exit
+            print(f"Rename failed ({rename_err}), falling back to .bat trampoline")
+            bat_fd = tempfile.NamedTemporaryFile(
+                suffix=".bat", prefix="_update_", dir=str(exe_path.parent), delete=False
+            )
+            bat_path = Path(bat_fd.name)
+            bat_fd.close()
+            pid = os.getpid()
+            _bad = set('"&|^<>%')
+            for p in (new_exe, exe_path):
+                if _bad & set(str(p)):
+                    raise RuntimeError(  # noqa: B904
+                        f"Update path contains unsafe batch characters: {p}"
+                    )
+            bat_content = (
+                "@echo off\r\n"
+                ":wait\r\n"
+                f'tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul && '
+                f"(timeout /t 1 /nobreak >nul & goto wait)\r\n"
+                "timeout /t 3 /nobreak >nul\r\n"
+                f'move /y "{new_exe}" "{exe_path}"\r\n'
+                'del "%~f0"\r\n'
+            )
+            bat_path.write_text(bat_content)
+            subprocess.Popen(
+                ["cmd", "/c", str(bat_path)],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                close_fds=True,
+            )
+            self._safe_after(
+                0,
+                lambda: QMessageBox.information(
+                    self,
+                    "Update Installed",
+                    "Updated to the latest version.\n\n"
+                    "Please close and reopen the app to use it.",
+                ),
+            )
+
+    def _apply_update_frozen_linux(
+        self,
+        download_url,
+        asset_name,
+        headers,
+        exe_path,
+        release_data,
+        _update_progress,
+        _close_progress,
+    ):
+        """Linux portable binary update: download, verify, rename-dance in place."""
+        new_exe = exe_path.with_name(exe_path.name + ".new")
+        old_exe = exe_path.with_name(exe_path.name + ".old")
+
+        self._download_to_file(
+            download_url, headers, new_exe, _update_progress, asset_name
+        )
+        self._safe_after(0, _close_progress)
+        self._verify_sha256_or_abort(release_data, asset_name, new_exe, headers)
+
+        if exe_path.is_symlink():
+            new_exe.unlink(missing_ok=True)
+            raise RuntimeError(f"Refusing to overwrite symlink: {exe_path}")
+
+        os.chmod(str(new_exe), 0o755)  # noqa: S103
+
+        try:
+            if old_exe.exists():
+                old_exe.unlink()
+            exe_path.rename(old_exe)
+            try:
+                new_exe.rename(exe_path)
+            except Exception:
+                if old_exe.exists() and not exe_path.exists():
+                    old_exe.rename(exe_path)
+                raise
+        except OSError as e:
+            raise RuntimeError(f"Failed to swap binaries: {e}") from e
+
+        self._safe_after(
+            0,
+            lambda: QMessageBox.information(
+                self,
+                "Update Installed",
+                "Updated to the latest version.\n\n"
+                "Please close and reopen the app to use it.",
+            ),
+        )
+
     def _apply_update(self, release_data):
         tmp_path = None
         progress_state: dict = {"dlg": None, "lbl": None, "bar": None}
@@ -1645,19 +1945,13 @@ class AppWindow(QMainWindow):
                 raise ValueError(f"Invalid tag format: {tag_name}")
 
             if getattr(sys, "frozen", False):
-
-                def _frozen_notice():
-                    _close_progress()
-                    QMessageBox.information(
-                        self,
-                        "Update Available",
-                        f"A new version ({tag_name}) is available.\n\n"
-                        "Frozen binaries cannot self-update.\n"
-                        "Please download the latest release from GitHub.",
-                    )
-                    QDesktopServices.openUrl(QUrl(GITHUB_RELEASES_URL))
-
-                self._safe_after(0, _frozen_notice)
+                self._apply_update_frozen(
+                    release_data,
+                    tag_name,
+                    _create_progress,
+                    _update_progress,
+                    _close_progress,
+                )
                 return
 
             download_url = f"{GITHUB_RAW_URL}/{tag_name}/autoclicker.py"
@@ -1882,6 +2176,7 @@ class AppWindow(QMainWindow):
 
 
 def main():
+    AppWindow.cleanup_old_updates()
     app = QApplication(sys.argv)
     app.setWindowIcon(_make_icon())
     win = AppWindow()
