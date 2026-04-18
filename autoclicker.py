@@ -77,7 +77,7 @@ from autoclicker_core import (
 
 # ── App identity ──────────────────────────────────────────────────────
 APP_NAME = "AutoClicker"
-__version__ = "1.18"
+__version__ = "1.19"
 WINDOW_SIZE = (560, 820)
 
 # ── Color palette ─────────────────────────────────────────────────────
