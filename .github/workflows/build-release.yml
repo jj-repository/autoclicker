@@ -104,7 +104,9 @@ jobs:
 
     - name: Generate SHA256SUMS
       run: |
-        sha256sum dist/linux/Autoclicker-Linux dist/windows/Autoclicker.exe autoclicker.py > SHA256SUMS
+        (cd dist/linux && sha256sum Autoclicker-Linux) > SHA256SUMS
+        (cd dist/windows && sha256sum Autoclicker.exe) >> SHA256SUMS
+        sha256sum autoclicker.py >> SHA256SUMS
 
     - name: Create Release
       run: |
