@@ -115,15 +115,7 @@ jobs:
           dist/windows/Autoclicker.exe \
           SHA256SUMS \
           --title "${{ github.ref_name }}" \
-          --generate-notes \
           --notes "$(cat <<'NOTES'
-        ## Downloads
-
-        | File | Platform |
-        |------|----------|
-        | **Autoclicker.exe** | Windows |
-        | **Autoclicker-Linux** | Linux (requires sudo) |
-
         ## Installation
 
         ### Windows
@@ -136,5 +128,15 @@ jobs:
         3. Run with sudo: `sudo ./Autoclicker-Linux`
         NOTES
         )"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Prepend download disclaimer to release notes
+      run: |
+        TAG="${{ github.ref_name }}"
+        DISCLAIMER=$'## 📥 Downloads\n\n**Just grab one file:**\n- **Windows** → `Autoclicker.exe`\n- **Linux** → `Autoclicker-Linux` (requires sudo)\n\nThe `SHA256SUMS` file is an optional checksum for verifying the download — you don\'t need it to use the app.\n\n---\n\n'
+        BODY=$(gh release view "$TAG" --json body -q .body)
+        printf '%s%s' "$DISCLAIMER" "$BODY" > /tmp/release_notes.md
+        gh release edit "$TAG" --notes-file /tmp/release_notes.md
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
