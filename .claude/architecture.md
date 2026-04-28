@@ -28,3 +28,7 @@ self._safe_after(0, lambda: self._show_update_dialog(...))
 - Key conversion: `_tk_key_to_evdev()` (evdev)
 - Serialization: `_serialize_key()` / `_deserialize_key()`
 - Display: `_get_key_display_name()`
+
+## Clicker Modes
+- **Click mode** (default): `action_loop` thread fires `perform_click()` at the configured interval.
+- **Hold mode**: `_start_clickerN_locked` calls `_press_mouse_button()` once, stores the held button in `clickerN_held_button`, and skips the thread. `_stop_clickerN_locked` calls `_release_mouse_button()` and clears the field. Triggered by the per-clicker `Hold button` checkbox in the UI; persisted as `clickerN_hold_mode` in config. Emergency stop and `closeEvent` go through the standard stop path so a held button is always released on shutdown.

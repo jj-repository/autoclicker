@@ -67,6 +67,8 @@ class DualAutoClicker:
         self.clicker1_hotkey_display = "F6"
         self.clicker1_interval = DEFAULT_CLICKER1_INTERVAL
         self.clicker1_mouse_button = "left"
+        self.clicker1_hold_mode = False
+        self.clicker1_held_button = None
         self.clicker1_clicking = False
         self.clicker1_thread = None
         self.clicker1_stop = threading.Event()
@@ -77,6 +79,8 @@ class DualAutoClicker:
         self.clicker2_hotkey_display = "F7"
         self.clicker2_interval = DEFAULT_CLICKER2_INTERVAL
         self.clicker2_mouse_button = "left"
+        self.clicker2_hold_mode = False
+        self.clicker2_held_button = None
         self.clicker2_clicking = False
         self.clicker2_thread = None
         self.clicker2_stop = threading.Event()
@@ -186,6 +190,9 @@ class DualAutoClicker:
             if mb2 in self._VALID_MOUSE_BUTTONS:
                 self.clicker2_mouse_button = mb2
 
+            self.clicker1_hold_mode = bool(config.get("clicker1_hold_mode", False))
+            self.clicker2_hold_mode = bool(config.get("clicker2_hold_mode", False))
+
             # Load hotkeys
             if "clicker1_hotkey" in config:
                 self.clicker1_hotkey = self._deserialize_key(config["clicker1_hotkey"])
@@ -263,6 +270,8 @@ class DualAutoClicker:
                 "clicker2_interval": self.clicker2_interval,
                 "clicker1_mouse_button": self.clicker1_mouse_button,
                 "clicker2_mouse_button": self.clicker2_mouse_button,
+                "clicker1_hold_mode": self.clicker1_hold_mode,
+                "clicker2_hold_mode": self.clicker2_hold_mode,
                 "clicker1_hotkey": self._serialize_key(self.clicker1_hotkey),
                 "clicker1_hotkey_display": self.clicker1_hotkey_display,
                 "clicker2_hotkey": self._serialize_key(self.clicker2_hotkey),
@@ -441,6 +450,21 @@ class DualAutoClicker:
         )
         self.status1_label.grid(row=start_row + 7, column=column, pady=(10, 5))
 
+        # Hold mode toggle
+        self._c1_hold_var = tk.BooleanVar(value=self.clicker1_hold_mode)
+        self._c1_hold_cb = ttk.Checkbutton(
+            parent,
+            text="Hold button (no clicking)",
+            variable=self._c1_hold_var,
+            command=lambda: self._on_hold_mode_toggled("clicker1"),
+        )
+        self._c1_hold_cb.grid(
+            row=start_row + 8, column=column, sticky=tk.W, pady=(5, 0)
+        )
+        self._c1_interval_entry = interval_entry
+        self._c1_apply_button = apply_button
+        self._sync_hold_mode_ui("clicker1")
+
     def _setup_clicker2_ui(self, parent, column, start_row):
         """Setup UI for Clicker 2"""
         # Title
@@ -499,6 +523,21 @@ class DualAutoClicker:
             fg="green",
         )
         self.status2_label.grid(row=start_row + 7, column=column, pady=(10, 5))
+
+        # Hold mode toggle
+        self._c2_hold_var = tk.BooleanVar(value=self.clicker2_hold_mode)
+        self._c2_hold_cb = ttk.Checkbutton(
+            parent,
+            text="Hold button (no clicking)",
+            variable=self._c2_hold_var,
+            command=lambda: self._on_hold_mode_toggled("clicker2"),
+        )
+        self._c2_hold_cb.grid(
+            row=start_row + 8, column=column, sticky=tk.W, pady=(5, 0)
+        )
+        self._c2_interval_entry = interval_entry
+        self._c2_apply_button = apply_button
+        self._sync_hold_mode_ui("clicker2")
 
     def _setup_keypresser_left_ui(self, parent, column, start_row):
         """Setup left side of Keyboard Key Presser UI"""
@@ -769,6 +808,29 @@ class DualAutoClicker:
         setattr(self, f"{clicker}_mouse_button", button)
         self.save_config()
 
+    def _on_hold_mode_toggled(self, clicker):
+        var = self._c1_hold_var if clicker == "clicker1" else self._c2_hold_var
+        setattr(self, f"{clicker}_hold_mode", bool(var.get()))
+        self._sync_hold_mode_ui(clicker)
+        self.save_config()
+
+    def _sync_hold_mode_ui(self, clicker):
+        on = getattr(self, f"{clicker}_hold_mode")
+        entry = (
+            self._c1_interval_entry
+            if clicker == "clicker1"
+            else self._c2_interval_entry
+        )
+        button = (
+            self._c1_apply_button if clicker == "clicker1" else self._c2_apply_button
+        )
+        state = "disabled" if on else "normal"
+        try:
+            entry.configure(state=state)
+            button.configure(state=state)
+        except Exception:
+            pass
+
     def perform_click(self, button_name="left"):
         """Perform a single mouse click using evdev"""
         if self.virtual_mouse is None:
@@ -777,6 +839,22 @@ class DualAutoClicker:
         btn = self._EVDEV_MOUSE_BUTTONS.get(button_name, e.BTN_LEFT)
         self.virtual_mouse.write(e.EV_KEY, btn, 1)
         self.virtual_mouse.syn()
+        self.virtual_mouse.write(e.EV_KEY, btn, 0)
+        self.virtual_mouse.syn()
+
+    def _press_mouse_button(self, button_name="left"):
+        """Press and hold a mouse button (no release)."""
+        if self.virtual_mouse is None:
+            self.init_virtual_mouse()
+        btn = self._EVDEV_MOUSE_BUTTONS.get(button_name, e.BTN_LEFT)
+        self.virtual_mouse.write(e.EV_KEY, btn, 1)
+        self.virtual_mouse.syn()
+
+    def _release_mouse_button(self, button_name="left"):
+        """Release a previously held mouse button."""
+        if self.virtual_mouse is None:
+            return
+        btn = self._EVDEV_MOUSE_BUTTONS.get(button_name, e.BTN_LEFT)
         self.virtual_mouse.write(e.EV_KEY, btn, 0)
         self.virtual_mouse.syn()
 
@@ -855,6 +933,23 @@ class DualAutoClicker:
         if not self.clicker1_clicking:
             self.clicker1_clicking = True
             self.clicker1_stop.clear()
+            if self.clicker1_hold_mode:
+                button = self.clicker1_mouse_button
+                try:
+                    self._press_mouse_button(button)
+                except Exception as ex:
+                    print(f"Error in clicker 1 (hold): {ex}")
+                    self.clicker1_clicking = False
+                    self._set_status(
+                        self.status1_var, self.status1_label, "Error", "orange"
+                    )
+                    return
+                self.clicker1_held_button = button
+                self._set_status(
+                    self.status1_var, self.status1_label, "Holding...", "red"
+                )
+                return
+
             self._set_status(self.status1_var, self.status1_label, "Clicking...", "red")
 
             def on_error(ex):
@@ -886,6 +981,12 @@ class DualAutoClicker:
         if self.clicker1_clicking:
             self.clicker1_clicking = False
             self.clicker1_stop.set()
+            if self.clicker1_held_button is not None:
+                try:
+                    self._release_mouse_button(self.clicker1_held_button)
+                except Exception as ex:
+                    print(f"Error releasing clicker 1 hold: {ex}")
+                self.clicker1_held_button = None
             self._set_status(self.status1_var, self.status1_label, "Idle", "green")
 
     # ── Clicker 2 ─────────────────────────────────────────────
@@ -915,6 +1016,23 @@ class DualAutoClicker:
         if not self.clicker2_clicking:
             self.clicker2_clicking = True
             self.clicker2_stop.clear()
+            if self.clicker2_hold_mode:
+                button = self.clicker2_mouse_button
+                try:
+                    self._press_mouse_button(button)
+                except Exception as ex:
+                    print(f"Error in clicker 2 (hold): {ex}")
+                    self.clicker2_clicking = False
+                    self._set_status(
+                        self.status2_var, self.status2_label, "Error", "orange"
+                    )
+                    return
+                self.clicker2_held_button = button
+                self._set_status(
+                    self.status2_var, self.status2_label, "Holding...", "red"
+                )
+                return
+
             self._set_status(self.status2_var, self.status2_label, "Clicking...", "red")
 
             def on_error(ex):
@@ -946,6 +1064,12 @@ class DualAutoClicker:
         if self.clicker2_clicking:
             self.clicker2_clicking = False
             self.clicker2_stop.set()
+            if self.clicker2_held_button is not None:
+                try:
+                    self._release_mouse_button(self.clicker2_held_button)
+                except Exception as ex:
+                    print(f"Error releasing clicker 2 hold: {ex}")
+                self.clicker2_held_button = None
             self._set_status(self.status2_var, self.status2_label, "Idle", "green")
 
     # ── Key Presser ───────────────────────────────────────────

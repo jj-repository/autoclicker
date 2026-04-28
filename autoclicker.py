@@ -77,7 +77,7 @@ from autoclicker_core import (
 
 # ── App identity ──────────────────────────────────────────────────────
 APP_NAME = "AutoClicker"
-__version__ = "1.19"
+__version__ = "1.20"
 WINDOW_SIZE = (560, 820)
 
 # ── Color palette ─────────────────────────────────────────────────────
@@ -395,6 +395,8 @@ class AppWindow(QMainWindow):
         self.clicker1_hotkey_display = "F6"
         self.clicker1_interval = DEFAULT_CLICKER1_INTERVAL
         self.clicker1_mouse_button = "left"
+        self.clicker1_hold_mode = False
+        self.clicker1_held_button = None
         self.clicker1_clicking = False
         self.clicker1_thread = None
         self.clicker1_stop = threading.Event()
@@ -404,6 +406,8 @@ class AppWindow(QMainWindow):
         self.clicker2_hotkey_display = "F7"
         self.clicker2_interval = DEFAULT_CLICKER2_INTERVAL
         self.clicker2_mouse_button = "left"
+        self.clicker2_hold_mode = False
+        self.clicker2_held_button = None
         self.clicker2_clicking = False
         self.clicker2_thread = None
         self.clicker2_stop = threading.Event()
@@ -543,14 +547,25 @@ class AppWindow(QMainWindow):
         c1_btn_row.addStretch()
         c1.addLayout(c1_btn_row)
         c1.addSpacing(4)
+        self._c1_hold_cb = QCheckBox("Hold button (no clicking)")
+        self._c1_hold_cb.setToolTip(
+            "Hold the selected mouse button down instead of clicking. "
+            "Press the hotkey again or emergency stop to release."
+        )
+        self._c1_hold_cb.setChecked(self.clicker1_hold_mode)
+        self._c1_hold_cb.stateChanged.connect(
+            lambda: self._on_hold_mode_toggled("clicker1")
+        )
+        c1.addWidget(self._c1_hold_cb)
+        c1.addSpacing(4)
         c1.addWidget(QLabel("Interval (seconds):"))
         c1_int = QHBoxLayout()
         self._interval1_edit = QLineEdit(str(self.clicker1_interval))
         self._interval1_edit.setFixedWidth(100)
         c1_int.addWidget(self._interval1_edit)
-        c1_apply = QPushButton("Apply")
-        c1_apply.clicked.connect(self._apply_interval1)
-        c1_int.addWidget(c1_apply)
+        self._c1_apply_btn = QPushButton("Apply")
+        self._c1_apply_btn.clicked.connect(self._apply_interval1)
+        c1_int.addWidget(self._c1_apply_btn)
         c1_int.addStretch()
         c1.addLayout(c1_int)
         c1.addSpacing(8)
@@ -598,14 +613,25 @@ class AppWindow(QMainWindow):
         c2_btn_row.addStretch()
         c2.addLayout(c2_btn_row)
         c2.addSpacing(4)
+        self._c2_hold_cb = QCheckBox("Hold button (no clicking)")
+        self._c2_hold_cb.setToolTip(
+            "Hold the selected mouse button down instead of clicking. "
+            "Press the hotkey again or emergency stop to release."
+        )
+        self._c2_hold_cb.setChecked(self.clicker2_hold_mode)
+        self._c2_hold_cb.stateChanged.connect(
+            lambda: self._on_hold_mode_toggled("clicker2")
+        )
+        c2.addWidget(self._c2_hold_cb)
+        c2.addSpacing(4)
         c2.addWidget(QLabel("Interval (seconds):"))
         c2_int = QHBoxLayout()
         self._interval2_edit = QLineEdit(str(self.clicker2_interval))
         self._interval2_edit.setFixedWidth(100)
         c2_int.addWidget(self._interval2_edit)
-        c2_apply = QPushButton("Apply")
-        c2_apply.clicked.connect(self._apply_interval2)
-        c2_int.addWidget(c2_apply)
+        self._c2_apply_btn = QPushButton("Apply")
+        self._c2_apply_btn.clicked.connect(self._apply_interval2)
+        c2_int.addWidget(self._c2_apply_btn)
         c2_int.addStretch()
         c2.addLayout(c2_int)
         c2.addSpacing(8)
@@ -699,6 +725,17 @@ class AppWindow(QMainWindow):
 
         layout.addStretch()
         self._tabs.addTab(self._scroll_tab(page), "AutoClicker")
+
+        # Sync interval-input enabled state with hold-mode flag.
+        self._sync_hold_mode_ui("clicker1")
+        self._sync_hold_mode_ui("clicker2")
+
+    def _sync_hold_mode_ui(self, clicker: str):
+        on = getattr(self, f"{clicker}_hold_mode")
+        edit = self._interval1_edit if clicker == "clicker1" else self._interval2_edit
+        apply_btn = self._c1_apply_btn if clicker == "clicker1" else self._c2_apply_btn
+        edit.setEnabled(not on)
+        apply_btn.setEnabled(not on)
 
     # ══════════════════════════════════════════════════════════════
     #  Settings Tab
@@ -819,6 +856,14 @@ class AppWindow(QMainWindow):
                 "toggle hotkey.",
             ),
             (
+                "Hold Mode",
+                "Each clicker has a 'Hold button (no clicking)' checkbox. "
+                "When enabled, pressing the toggle hotkey holds the selected "
+                "mouse button down continuously until the hotkey is pressed "
+                "again or the emergency stop fires. The interval is ignored "
+                "in this mode.",
+            ),
+            (
                 "Keyboard Key Presser",
                 "Automatically presses a selected keyboard key at the configured "
                 "interval. Click the 'Key to Press' button and press the desired "
@@ -912,6 +957,9 @@ class AppWindow(QMainWindow):
         if mb2 in self._VALID_MOUSE_BUTTONS:
             self.clicker2_mouse_button = mb2
 
+        self.clicker1_hold_mode = bool(config.get("clicker1_hold_mode", False))
+        self.clicker2_hold_mode = bool(config.get("clicker2_hold_mode", False))
+
         if "clicker1_hotkey" in config:
             self.clicker1_hotkey = self._deserialize_key(config["clicker1_hotkey"])
             d = config.get("clicker1_hotkey_display", "F6")
@@ -998,6 +1046,8 @@ class AppWindow(QMainWindow):
                 "clicker2_interval": self.clicker2_interval,
                 "clicker1_mouse_button": self.clicker1_mouse_button,
                 "clicker2_mouse_button": self.clicker2_mouse_button,
+                "clicker1_hold_mode": self.clicker1_hold_mode,
+                "clicker2_hold_mode": self.clicker2_hold_mode,
                 "clicker1_hotkey": self._serialize_key(self.clicker1_hotkey),
                 "clicker1_hotkey_display": self.clicker1_hotkey_display,
                 "clicker2_hotkey": self._serialize_key(self.clicker2_hotkey),
@@ -1055,6 +1105,16 @@ class AppWindow(QMainWindow):
             active = name == current
             btn.setChecked(active)
             btn.setStyleSheet(self._MB_ACTIVE if active else self._MB_INACTIVE)
+
+    def _on_hold_mode_toggled(self, clicker: str):
+        cb = self._c1_hold_cb if clicker == "clicker1" else self._c2_hold_cb
+        edit = self._interval1_edit if clicker == "clicker1" else self._interval2_edit
+        apply_btn = self._c1_apply_btn if clicker == "clicker1" else self._c2_apply_btn
+        on = cb.isChecked()
+        setattr(self, f"{clicker}_hold_mode", on)
+        edit.setEnabled(not on)
+        apply_btn.setEnabled(not on)
+        self._save_config()
 
     # ══════════════════════════════════════════════════════════════
     #  Interval application
@@ -1194,6 +1254,14 @@ class AppWindow(QMainWindow):
         btn = self._MOUSE_BUTTONS.get(button_name, mouse.Button.left)
         self.mouse_controller.click(btn, 1)
 
+    def _press_mouse_button(self, button_name="left"):
+        btn = self._MOUSE_BUTTONS.get(button_name, mouse.Button.left)
+        self.mouse_controller.press(btn)
+
+    def _release_mouse_button(self, button_name="left"):
+        btn = self._MOUSE_BUTTONS.get(button_name, mouse.Button.left)
+        self.mouse_controller.release(btn)
+
     def perform_keypress(self, target_key):
         self.keyboard_controller.press(target_key)
         self.keyboard_controller.release(target_key)
@@ -1250,6 +1318,19 @@ class AppWindow(QMainWindow):
         if not self.clicker1_clicking:
             self.clicker1_clicking = True
             self.clicker1_stop.clear()
+            if self.clicker1_hold_mode:
+                button = self.clicker1_mouse_button
+                try:
+                    self._press_mouse_button(button)
+                except Exception as e:
+                    print(f"Error in clicker 1 (hold): {e}")
+                    self.clicker1_clicking = False
+                    self._set_status(self._status1_label, "Error", STATUS_ERROR_COLOR)
+                    return
+                self.clicker1_held_button = button
+                self._set_status(self._status1_label, "Holding...", STATUS_ACTIVE_COLOR)
+                return
+
             self._set_status(self._status1_label, "Clicking...", STATUS_ACTIVE_COLOR)
 
             def on_error(e):
@@ -1278,6 +1359,12 @@ class AppWindow(QMainWindow):
         if self.clicker1_clicking:
             self.clicker1_clicking = False
             self.clicker1_stop.set()
+            if self.clicker1_held_button is not None:
+                try:
+                    self._release_mouse_button(self.clicker1_held_button)
+                except Exception as e:
+                    print(f"Error releasing clicker 1 hold: {e}")
+                self.clicker1_held_button = None
             self._set_status(self._status1_label, "Idle", STATUS_IDLE_COLOR)
 
     # ── Clicker 2 ─────────────────────────────────────────────
@@ -1307,6 +1394,19 @@ class AppWindow(QMainWindow):
         if not self.clicker2_clicking:
             self.clicker2_clicking = True
             self.clicker2_stop.clear()
+            if self.clicker2_hold_mode:
+                button = self.clicker2_mouse_button
+                try:
+                    self._press_mouse_button(button)
+                except Exception as e:
+                    print(f"Error in clicker 2 (hold): {e}")
+                    self.clicker2_clicking = False
+                    self._set_status(self._status2_label, "Error", STATUS_ERROR_COLOR)
+                    return
+                self.clicker2_held_button = button
+                self._set_status(self._status2_label, "Holding...", STATUS_ACTIVE_COLOR)
+                return
+
             self._set_status(self._status2_label, "Clicking...", STATUS_ACTIVE_COLOR)
 
             def on_error(e):
@@ -1335,6 +1435,12 @@ class AppWindow(QMainWindow):
         if self.clicker2_clicking:
             self.clicker2_clicking = False
             self.clicker2_stop.set()
+            if self.clicker2_held_button is not None:
+                try:
+                    self._release_mouse_button(self.clicker2_held_button)
+                except Exception as e:
+                    print(f"Error releasing clicker 2 hold: {e}")
+                self.clicker2_held_button = None
             self._set_status(self._status2_label, "Idle", STATUS_IDLE_COLOR)
 
     # ── Key Presser ───────────────────────────────────────────

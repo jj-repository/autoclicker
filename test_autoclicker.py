@@ -544,6 +544,10 @@ class TestConfigPersistence(unittest.TestCase):
         obj.keypresser_interval = 0.25
         obj.clicker1_mouse_button = "left"
         obj.clicker2_mouse_button = "left"
+        obj.clicker1_hold_mode = False
+        obj.clicker2_hold_mode = False
+        obj.clicker1_held_button = None
+        obj.clicker2_held_button = None
         obj.clicker1_hotkey = mock_key.f6
         obj.clicker1_hotkey_display = "F6"
         obj.clicker2_hotkey = mock_key.f7
@@ -710,6 +714,10 @@ class TestThreadSafety(unittest.TestCase):
         obj.keypresser_interval = 0.1
         obj.clicker1_mouse_button = "left"
         obj.clicker2_mouse_button = "left"
+        obj.clicker1_hold_mode = False
+        obj.clicker2_hold_mode = False
+        obj.clicker1_held_button = None
+        obj.clicker2_held_button = None
         obj.clicker1_thread = None
         obj.clicker2_thread = None
         obj.keypresser_thread = None
@@ -846,6 +854,42 @@ class TestThreadSafety(unittest.TestCase):
             if t and t.is_alive():
                 t.join(timeout=2)
 
+    def test_hold_mode_press_no_thread(self):
+        obj = self._make_clicker()
+        obj.clicker1_hold_mode = True
+        obj._press_mouse_button = MagicMock()
+        obj._release_mouse_button = MagicMock()
+        obj.start_clicker1()
+        self.assertTrue(obj.clicker1_clicking)
+        self.assertEqual(obj.clicker1_held_button, "left")
+        self.assertIsNone(obj.clicker1_thread)
+        obj._press_mouse_button.assert_called_once_with("left")
+        obj._release_mouse_button.assert_not_called()
+
+    def test_hold_mode_release_on_stop(self):
+        obj = self._make_clicker()
+        obj.clicker1_hold_mode = True
+        obj.clicker1_mouse_button = "right"
+        obj._press_mouse_button = MagicMock()
+        obj._release_mouse_button = MagicMock()
+        obj.start_clicker1()
+        obj.stop_clicker1()
+        self.assertFalse(obj.clicker1_clicking)
+        self.assertIsNone(obj.clicker1_held_button)
+        obj._release_mouse_button.assert_called_once_with("right")
+
+    def test_hold_mode_emergency_stop_releases(self):
+        obj = self._make_clicker()
+        obj.clicker2_hold_mode = True
+        obj.clicker2_mouse_button = "middle"
+        obj._press_mouse_button = MagicMock()
+        obj._release_mouse_button = MagicMock()
+        obj.start_clicker2()
+        obj.emergency_stop_all()
+        self.assertFalse(obj.clicker2_clicking)
+        self.assertIsNone(obj.clicker2_held_button)
+        obj._release_mouse_button.assert_called_once_with("middle")
+
 
 class TestVersionNewerPyQt(unittest.TestCase):
     """Additional _version_newer tests calling production code from AppWindow."""
@@ -938,6 +982,10 @@ class TestConfigPersistencePyQt(unittest.TestCase):
         obj.clicker2_interval = 0.6
         obj.clicker1_mouse_button = "left"
         obj.clicker2_mouse_button = "left"
+        obj.clicker1_hold_mode = False
+        obj.clicker2_hold_mode = False
+        obj.clicker1_held_button = None
+        obj.clicker2_held_button = None
         obj.clicker1_hotkey = mock_key.f6
         obj.clicker1_hotkey_display = "F6"
         obj.clicker2_hotkey = mock_key.f7
@@ -1106,6 +1154,10 @@ class TestThreadSafetyPyQt(unittest.TestCase):
         obj.keypresser_interval = 0.1
         obj.clicker1_mouse_button = "left"
         obj.clicker2_mouse_button = "left"
+        obj.clicker1_hold_mode = False
+        obj.clicker2_hold_mode = False
+        obj.clicker1_held_button = None
+        obj.clicker2_held_button = None
         obj.clicker1_thread = None
         obj.clicker2_thread = None
         obj.keypresser_thread = None
@@ -1205,6 +1257,21 @@ class TestThreadSafetyPyQt(unittest.TestCase):
             if t:
                 t.join(timeout=1)
 
+    def test_hold_mode_press_release_pyqt(self):
+        obj = self._make_clicker()
+        obj.clicker1_hold_mode = True
+        obj.clicker1_mouse_button = "right"
+        obj._press_mouse_button = MagicMock()
+        obj._release_mouse_button = MagicMock()
+        obj.start_clicker1()
+        self.assertTrue(obj.clicker1_clicking)
+        self.assertIsNone(obj.clicker1_thread)
+        self.assertEqual(obj.clicker1_held_button, "right")
+        obj._press_mouse_button.assert_called_once_with("right")
+        obj.stop_clicker1()
+        obj._release_mouse_button.assert_called_once_with("right")
+        self.assertIsNone(obj.clicker1_held_button)
+
 
 class TestActionLoopError(unittest.TestCase):
     """Test that action_loop from core handles errors gracefully."""
@@ -1250,6 +1317,10 @@ class TestConfigRoundtripHotkeysEvdev(unittest.TestCase):
         obj.keypresser_interval = 0.25
         obj.clicker1_mouse_button = "left"
         obj.clicker2_mouse_button = "left"
+        obj.clicker1_hold_mode = False
+        obj.clicker2_hold_mode = False
+        obj.clicker1_held_button = None
+        obj.clicker2_held_button = None
         obj.clicker1_hotkey = mock_key.f6
         obj.clicker1_hotkey_display = "F6"
         obj.clicker2_hotkey = mock_key.f7
@@ -1714,6 +1785,10 @@ class TestThreadJoinVerification(unittest.TestCase):
         obj.keypresser_interval = 0.01
         obj.clicker1_mouse_button = "left"
         obj.clicker2_mouse_button = "left"
+        obj.clicker1_hold_mode = False
+        obj.clicker2_hold_mode = False
+        obj.clicker1_held_button = None
+        obj.clicker2_held_button = None
         obj.clicker1_thread = None
         obj.clicker2_thread = None
         obj.keypresser_thread = None
@@ -1770,6 +1845,10 @@ class TestConfigTargetKeyRoundtripPyQt(unittest.TestCase):
             obj.clicker2_interval = 0.5
             obj.clicker1_mouse_button = "left"
             obj.clicker2_mouse_button = "left"
+            obj.clicker1_hold_mode = False
+            obj.clicker2_hold_mode = False
+            obj.clicker1_held_button = None
+            obj.clicker2_held_button = None
             obj.clicker1_hotkey = mock_key.f6
             obj.clicker1_hotkey_display = "F6"
             obj.clicker2_hotkey = mock_key.f7
@@ -1796,6 +1875,10 @@ class TestConfigTargetKeyRoundtripPyQt(unittest.TestCase):
             obj2.clicker2_interval = 0.5
             obj2.clicker1_mouse_button = "left"
             obj2.clicker2_mouse_button = "left"
+            obj2.clicker1_hold_mode = False
+            obj2.clicker2_hold_mode = False
+            obj2.clicker1_held_button = None
+            obj2.clicker2_held_button = None
             obj2.clicker1_hotkey = mock_key.f6
             obj2.clicker1_hotkey_display = "F6"
             obj2.clicker2_hotkey = mock_key.f7
