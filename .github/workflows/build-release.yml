@@ -34,7 +34,7 @@ jobs:
         pyinstaller --onefile --name Autoclicker-Linux --hidden-import autoclicker_core --add-data "icon.png:." --add-data "takodachi.png:." autoclicker_evdev.py
 
     - name: Upload Linux artifacts
-      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: linux-executables
         path: |
@@ -65,7 +65,7 @@ jobs:
         pyinstaller --onefile --windowed --name Autoclicker --hidden-import autoclicker_core --icon=icon.ico --add-data "icon.ico;." --add-data "icon.png;." --add-data "takodachi.png;." autoclicker.py
 
     - name: Upload Windows artifacts
-      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: windows-executables
         path: |
@@ -96,7 +96,7 @@ jobs:
         path: dist/windows
 
     - name: Attest build provenance
-      uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v2
+      uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v2
       with:
         subject-path: |
           dist/linux/Autoclicker-Linux
